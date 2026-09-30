@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1b49">
+  <meta name="description" content="Scan QR codes with your camera or from an image. No account needed.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/pci-qr-192-v6.png" type="image/png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/pci-qr-180-v6.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>PCI · QR Scanner</title>
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <div class="brand"><img class="brand-logo" src="./icons/pci-logo.png" alt="Parking Concepts"><span class="brand-label">QR Scanner</span></div>
+      <button id="install" class="install" hidden>Install app</button>
+    </header>
+
+    <section class="intro">
+      <p class="eyebrow">SCAN IN SECONDS</p>
+      <h1>It all starts<br>with a <em>scan.</em></h1>
+      <p>Point your camera at a QR code or choose an image. Website links open automatically.</p>
+    </section>
+
+    <section class="scanner" aria-label="QR code scanner">
+      <div class="camera-stage" id="stage">
+        <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
+        <div class="camera-placeholder" id="placeholder">
+          <div class="placeholder-icon" aria-hidden="true">⌗</div>
+          <strong>Your camera is ready</strong>
+          <span>Press the button to get started</span>
+        </div>
+        <div class="scan-frame" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="scan-line"></div></div>
+        <div class="live-badge" id="liveBadge" hidden><i></i> Camera active</div>
+      </div>
+      <div class="controls">
+        <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Start camera</button>
+        <button id="switchButton" class="icon-button" title="Switch camera" aria-label="Switch camera" hidden>⇄</button>
+        <button id="torchButton" class="icon-button" title="Flashlight" aria-label="Turn flashlight on" hidden>☼</button>
+      </div>
+      <div class="divider"><span>or</span></div>
+      <label class="upload" for="fileInput"><span aria-hidden="true">↑</span> Choose an image with a QR code</label>
+      <input id="fileInput" type="file" accept="image/*" hidden>
+      <p id="status" class="status" role="status" aria-live="polite">Ready to scan.</p>
+    </section>
+
+    <section id="result" class="result" aria-labelledby="resultTitle" hidden>
+      <div class="section-heading"><span class="check">✓</span><h2 id="resultTitle">Code detected</h2></div>
+      <p id="resultValue" class="result-value"></p>
+      <div class="result-actions">
+        <a id="openLink" class="secondary" target="_blank" rel="noopener noreferrer" hidden>Open link ↗</a>
+        <button id="copyButton" class="secondary">Copy content</button>
+      </div>
+    </section>
+
+    <section class="history" aria-labelledby="historyTitle">
+      <div class="history-heading"><div><p class="eyebrow">YOUR SCANS</p><h2 id="historyTitle">Recent history</h2></div><button id="clearButton" class="text-button" hidden>Clear</button></div>
+      <p id="emptyHistory" class="empty">Your latest scans will appear here.</p>
+      <ul id="historyList"></ul>
+    </section>
+    <footer>Private by design · Scans are stored only in this browser</footer>
+  </main>
+  <script src="./app.js" defer></script>
+</body>
+</html>
