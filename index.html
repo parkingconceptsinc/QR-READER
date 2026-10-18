@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b1b49">
+  <meta name="theme-color" content="#050b16">
   <meta name="description" content="Scan QR codes with your camera or from an image. No account needed.">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/pci-qr-192-v6.png" type="image/png">
@@ -29,14 +29,15 @@
         <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
         <div class="camera-placeholder" id="placeholder">
           <div class="placeholder-icon" aria-hidden="true">⌗</div>
-          <strong>Starting rear camera…</strong>
-          <span>QR codes scan and open automatically</span>
+          <strong>Ready for the next scan</strong>
+          <span>Keep the QR inside the frame</span>
         </div>
         <div class="scan-frame" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="scan-line"></div></div>
-        <div class="live-badge" id="liveBadge" hidden><i></i> Camera active</div>
+        <div class="live-badge" id="liveBadge" hidden><i></i> LIVE SCAN</div>
+        <div class="camera-hint" id="cameraHint">Camera starts automatically · Links open instantly</div>
       </div>
       <div class="controls">
-        <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Opening camera…</button>
+        <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Start scanning</button>
         <button id="switchButton" class="icon-button" title="Switch camera" aria-label="Switch camera" hidden>⇄</button>
         <button id="torchButton" class="icon-button" title="Flashlight" aria-label="Turn flashlight on" hidden>☼</button>
       </div>
@@ -56,11 +57,11 @@
     </section>
 
     <section class="history" aria-labelledby="historyTitle">
-      <div class="history-heading"><div><p class="eyebrow">YOUR SCANS</p><h2 id="historyTitle">Recent history</h2></div><button id="clearButton" class="text-button" hidden>Clear</button></div>
-      <p id="emptyHistory" class="empty">Your latest scans will appear here.</p>
-      <ul id="historyList"></ul>
+      <div class="history-heading"><h2 id="historyTitle">Recent scans</h2><div><button id="historyToggle" class="text-button" aria-expanded="false">Show</button><button id="clearButton" class="text-button" hidden>Clear</button></div></div>
+      <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
+      <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
     </section>
-    <footer>Private by design · Scans are stored only in this browser</footer>
+    <footer>PCI QR · Fast, private, on-device scanning</footer>
   </main>
   <script src="./app.js" defer></script>
 </body>
