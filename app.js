@@ -131,7 +131,7 @@ function stopCamera() {
   $('switchButton').hidden = true;
   $('torchButton').hidden = true;
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start scanning';
-  $('cameraHint').textContent = 'Scanner stays ready · Tap to open links';
+  $('cameraHint').textContent = 'Camera ready · Scan again instantly';
 }
 
 async function startCamera() {
