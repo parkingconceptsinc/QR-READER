@@ -275,8 +275,11 @@ async function scanFrame(activeSession) {
         // Leave the preview running and make the failure actionable instead of
         // shutting down the camera and forcing the user to reopen the app.
         decoderFailed = true;
+        scanning = false;
+        $('cameraButton').disabled = false;
+        $('liveBadge').hidden = true;
         say(error.message, true);
-        $('cameraHint').textContent = 'Camera is on · Tap Start scanning to retry';
+        $('cameraHint').textContent = 'Camera preview is on · Tap Retry scanner';
         $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry scanner';
       }
     }
