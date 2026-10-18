@@ -13,6 +13,9 @@ let navigating = false;
 let installPrompt = null;
 let lastScanAt = 0;
 let detectorBusy = false;
+let lastDecodedValue = '';
+let lastDecodedAt = 0;
+let restartTimer = null;
 const historyKey = 'lector-qr-history-v1';
 const decoderUrl = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
 
@@ -88,17 +91,8 @@ function showResult(value, save = true) {
     renderHistory();
     if (navigator.vibrate) navigator.vibrate(80);
   }
-  if (save && url) {
-    if (navigating) return;
-    navigating = true;
-    // Keep a scanner entry immediately behind the destination so Android Back
-    // returns here instead of skipping to the page that launched the PWA.
-    history.pushState({ qrScanner: true }, '', location.href);
-    stopCamera();
-    window.location.assign(url);
-    return;
-  }
-  if (save && !url) history.pushState({ qrResult: true }, '', location.href);
+  // Keep this tab on the scanner. Web links are opened from the result card
+  // in a separate tab, so the reader is always available for the next code.
   $('resultValue').textContent = value;
   $('result').hidden = false;
   $('openLink').hidden = !url;
@@ -194,8 +188,20 @@ async function scanFrame(activeSession) {
       detectorBusy = false;
       if (!scanning || activeSession !== session) return;
       if (codes.length) {
+        const value = codes[0].rawValue;
+        const time = Date.now();
+        if (value === lastDecodedValue && time - lastDecodedAt < 3500) {
+          scheduleScan(activeSession);
+          return;
+        }
+        lastDecodedValue = value;
+        lastDecodedAt = time;
         stopCamera();
-        showResult(codes[0].rawValue);
+        showResult(value);
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => {
+          if (!document.hidden) startCamera();
+        }, 650);
         return;
       }
     } catch (error) {
@@ -284,16 +290,7 @@ document.addEventListener('visibilitychange', () => {
     startCamera();
   }
 });
-window.addEventListener('popstate', event => {
-  // Returning from an automatically opened URL restores the scanner history
-  // entry. Resume even when no in-app result panel was displayed.
-  if (event.state?.qrScanner || $('result').hidden === false) {
-    $('result').hidden = true;
-    navigating = false;
-    say('Ready to scan a new QR code.');
-    startCamera();
-  }
-});
+// Link navigation no longer replaces the scanner page; no Back interception is needed.
 window.addEventListener('pagehide', stopCamera);
 window.addEventListener('pageshow', () => {
   navigating = false;
