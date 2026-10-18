@@ -91,6 +91,9 @@ function showResult(value, save = true) {
   if (save && url) {
     if (navigating) return;
     navigating = true;
+    // Keep a scanner entry immediately behind the destination so Android Back
+    // returns here instead of skipping to the page that launched the PWA.
+    history.pushState({ qrScanner: true }, '', location.href);
     stopCamera();
     window.location.assign(url);
     return;
@@ -282,7 +285,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 window.addEventListener('popstate', event => {
-  if ($('result').hidden === false) {
+  // Returning from an automatically opened URL restores the scanner history
+  // entry. Resume even when no in-app result panel was displayed.
+  if (event.state?.qrScanner || $('result').hidden === false) {
     $('result').hidden = true;
     navigating = false;
     say('Ready to scan a new QR code.');
