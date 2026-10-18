@@ -34,7 +34,7 @@
         </div>
         <div class="scan-frame" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="scan-line"></div></div>
         <div class="live-badge" id="liveBadge" hidden><i></i> LIVE SCAN</div>
-        <div class="camera-hint" id="cameraHint">Opening camera automatically · QR links open instantly</div>
+        <div class="camera-hint" id="cameraHint">Requesting camera access · QR links open instantly</div>
       </div>
       <div class="controls">
         <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Opening camera…</button>
@@ -44,7 +44,7 @@
       <div class="divider"><span>or</span></div>
       <label class="upload" for="fileInput"><span aria-hidden="true">↑</span> Choose an image with a QR code</label>
       <input id="fileInput" type="file" accept="image/*" hidden>
-      <p id="status" class="status" role="status" aria-live="polite">Ready to scan.</p>
+      <p id="status" class="status" role="status" aria-live="polite">Requesting camera access…</p>
     </section>
 
     <section id="result" class="result" aria-labelledby="resultTitle" hidden>
@@ -63,6 +63,6 @@
     </section>
     <footer>PCI QR · Camera first. Instant scans. No extra steps.</footer>
   </main>
-  <script src="./app.js" defer></script>
+  <script src="./app.js?v=13" defer></script>
 </body>
 </html>
