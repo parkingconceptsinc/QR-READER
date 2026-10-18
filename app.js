@@ -143,6 +143,7 @@ async function startCamera(force = false) {
   stopCamera();
   const activeSession = session;
   starting = true;
+  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Opening camera…';
   $('cameraButton').disabled = true;
   say('Opening camera…');
   try {
