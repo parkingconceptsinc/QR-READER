@@ -134,7 +134,15 @@ async function startCamera() {
   $('cameraButton').disabled = true;
   say('Opening camera…');
   try {
-    const openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+    const videoConstraints = { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } };
+    let openedStream;
+    try {
+      openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
+    } catch (cameraError) {
+      // Some Android devices expose camera labels/constraints differently; retain a fast fallback.
+      if (cameraError.name !== 'OverconstrainedError' && cameraError.name !== 'NotFoundError') throw cameraError;
+      openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+    }
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     stream = openedStream;
     video.srcObject = stream;
