@@ -1,4 +1,4 @@
-const CACHE = 'lector-qr-v13';
+const CACHE = 'lector-qr-v14';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=13', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -23,7 +23,7 @@ self.addEventListener('fetch', event => {
   // Keep navigations fresh so installed PWAs do not stay trapped on a broken old shell.
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).then(response => {
+      fetch(event.request, { cache: 'no-store' }).then(response => {
         if (response.ok) {
           const copy = response.clone();
           event.waitUntil(caches.open(CACHE).then(cache => cache.put(event.request, copy)));
@@ -43,7 +43,7 @@ self.addEventListener('fetch', event => {
   // The QR scanner is versioned and fetched network-first to defeat stale JS caches.
   if (new URL(event.request.url).pathname.endsWith('/app.js')) {
     event.respondWith(
-      fetch(event.request).then(response => {
+      fetch(event.request, { cache: 'no-store' }).then(response => {
         if (response.ok) {
           const copy = response.clone();
           event.waitUntil(caches.open(CACHE).then(cache => cache.put(event.request, copy)));
