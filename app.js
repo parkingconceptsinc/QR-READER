@@ -235,7 +235,7 @@ function scheduleScan(activeSession) {
 async function scanFrame(activeSession) {
   if (!scanning || activeSession !== session || decoderFailed) return;
   const now = performance.now();
-  if (detectorBusy) { scheduleScan(activeSession); return; }
+  if (detectorBusy) return;
   if (now - lastScanAt < LIVE_SCAN_INTERVAL_MS) { scheduleScan(activeSession); return; }
   if (video.readyState >= 2) {
     detectorBusy = true;
