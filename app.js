@@ -91,6 +91,7 @@ function showResult(value, save = true) {
     window.location.assign(url);
     return;
   }
+  if (save && !url) history.pushState({ qrResult: true }, '', location.href);
   $('resultValue').textContent = value;
   $('result').hidden = false;
   $('openLink').hidden = !url;
@@ -253,9 +254,18 @@ document.addEventListener('visibilitychange', () => {
     startCamera();
   }
 });
+window.addEventListener('popstate', event => {
+  if ($('result').hidden === false) {
+    $('result').hidden = true;
+    navigating = false;
+    say('Ready to scan a new QR code.');
+    startCamera();
+  }
+});
 window.addEventListener('pagehide', stopCamera);
-window.addEventListener('pageshow', event => {
-  if (event.persisted) { navigating = false; startCamera(); }
+window.addEventListener('pageshow', () => {
+  navigating = false;
+  if (!document.hidden) startCamera();
 });
 
 if ('BarcodeDetector' in window) {
