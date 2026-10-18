@@ -343,6 +343,6 @@ if ('BarcodeDetector' in window) {
   try { detector = new BarcodeDetector({ formats: ['qr_code'] }); }
   catch { detector = fallbackDetector(); }
 } else detector = fallbackDetector();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').then(registration => registration.update()).catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(registration => registration.update()).catch(() => {});
 renderHistory();
 startCamera();
