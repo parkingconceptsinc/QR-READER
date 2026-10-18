@@ -397,6 +397,6 @@ if ('BarcodeDetector' in window) {
   detector = fallbackDetector();
   detectorMode = 'jsqr';
 }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(registration => registration.update()).catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
 renderHistory();
 startCamera();
