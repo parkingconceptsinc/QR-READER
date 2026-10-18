@@ -10,6 +10,7 @@ let session = 0;
 let starting = false;
 let resumeOnVisible = false;
 let navigating = false;
+let manuallyStopped = false;
 let installPrompt = null;
 let lastScanAt = 0;
 let detectorBusy = false;
@@ -134,8 +135,9 @@ function stopCamera() {
   $('cameraHint').textContent = 'Camera ready · Scan again instantly';
 }
 
-async function startCamera() {
-  if (starting || scanning || document.hidden || navigating) return;
+async function startCamera(force = false) {
+  if (force) manuallyStopped = false;
+  if (manuallyStopped || starting || scanning || document.hidden || navigating) return;
   if (!detector) return say('This browser does not support QR scanning. Try an up-to-date version of Chrome or Edge.', true);
   if (!navigator.mediaDevices?.getUserMedia) return say('Camera access requires HTTPS or localhost.', true);
   stopCamera();
@@ -149,9 +151,12 @@ async function startCamera() {
     try {
       openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
     } catch (cameraError) {
-      // Some Android devices expose camera labels/constraints differently; retain a fast fallback.
-      if (cameraError.name !== 'OverconstrainedError' && cameraError.name !== 'NotFoundError') throw cameraError;
-      openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+      // Keep permission/security errors visible, but retry camera selection more broadly for Android devices.
+      if (cameraError.name === 'NotAllowedError' || cameraError.name === 'SecurityError') throw cameraError;
+      openedStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
     }
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     stream = openedStream;
@@ -172,8 +177,15 @@ async function startCamera() {
   } catch (error) {
     if (activeSession !== session) return;
     stopCamera();
-    say(error.name === 'NotAllowedError' ? 'Camera permission needed. Allow access, then tap Start scanning.' : 'Camera unavailable. Check permission or close another app using the camera.', true);
-    $('cameraHint').textContent = 'Allow camera access to start scanning';
+    const message = error.name === 'NotAllowedError' || error.name === 'SecurityError'
+      ? 'Camera permission is blocked. Allow camera access in your browser settings, then tap Start scanning.'
+      : error.name === 'NotFoundError'
+        ? 'No camera was found on this device.'
+        : error.name === 'NotReadableError'
+          ? 'The camera is busy. Close other apps using it, then tap Start scanning.'
+          : 'Camera could not start. Check permission and try Start scanning again.';
+    say(message, true);
+    $('cameraHint').textContent = 'Camera could not start · Check permission and retry';
   }
 }
 
@@ -249,8 +261,11 @@ async function readFile(file) {
 }
 
 $('cameraButton').addEventListener('click', () => {
-  if (scanning) { stopCamera(); say('Camera stopped.'); }
-  else startCamera();
+  if (scanning) {
+    manuallyStopped = true;
+    stopCamera();
+    say('Camera stopped.');
+  } else startCamera(true);
 });
 $('switchButton').addEventListener('click', () => {
   facingMode = facingMode === 'environment' ? 'user' : 'environment';
@@ -299,25 +314,28 @@ $('install').addEventListener('click', async () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    resumeOnVisible = scanning || starting;
+    // A QR link may hand off to another app; preserve the intent to resume on return.
+    resumeOnVisible = !manuallyStopped && (scanning || starting || navigating);
     stopCamera();
-  } else if (resumeOnVisible) {
+  } else if (resumeOnVisible && !manuallyStopped) {
     resumeOnVisible = false;
+    navigating = false;
     startCamera();
   }
 });
 window.addEventListener('popstate', event => {
   if (event.state?.qrScanner || navigating) {
     navigating = false;
+    resumeOnVisible = false;
     $('result').hidden = true;
     say('Ready for the next scan.');
-    startCamera();
+    if (!manuallyStopped) startCamera();
   }
 });
 window.addEventListener('pagehide', stopCamera);
 window.addEventListener('pageshow', () => {
   navigating = false;
-  if (!document.hidden) startCamera();
+  if (!document.hidden && !manuallyStopped) startCamera();
 });
 
 if ('BarcodeDetector' in window) {
