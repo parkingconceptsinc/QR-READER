@@ -91,8 +91,16 @@ function showResult(value, save = true) {
     renderHistory();
     if (navigator.vibrate) navigator.vibrate(80);
   }
-  // Keep this tab on the scanner. Web links are opened from the result card
-  // in a separate tab, so the reader is always available for the next code.
+  if (save && url) {
+    if (navigating) return;
+    navigating = true;
+    // Preserve a scanner entry in the browser history before opening the QR URL.
+    // Android Back should return to this exact scanner page and restart its camera.
+    history.pushState({ qrScanner: true }, '', location.href);
+    stopCamera();
+    window.location.assign(url);
+    return;
+  }
   $('resultValue').textContent = value;
   $('result').hidden = false;
   $('openLink').hidden = !url;
@@ -198,10 +206,13 @@ async function scanFrame(activeSession) {
         lastDecodedAt = time;
         stopCamera();
         showResult(value);
-        clearTimeout(restartTimer);
-        restartTimer = setTimeout(() => {
-          if (!document.hidden) startCamera();
-        }, 650);
+        // Non-URL QR codes remain in the scanner and the camera resumes quickly.
+        if (!safeUrl(value)) {
+          clearTimeout(restartTimer);
+          restartTimer = setTimeout(() => {
+            if (!document.hidden) startCamera();
+          }, 350);
+        }
         return;
       }
     } catch (error) {
@@ -295,7 +306,14 @@ document.addEventListener('visibilitychange', () => {
     startCamera();
   }
 });
-// Link navigation no longer replaces the scanner page; no Back interception is needed.
+window.addEventListener('popstate', event => {
+  if (event.state?.qrScanner || navigating) {
+    navigating = false;
+    $('result').hidden = true;
+    say('Ready for the next scan.');
+    startCamera();
+  }
+});
 window.addEventListener('pagehide', stopCamera);
 window.addEventListener('pageshow', () => {
   navigating = false;
