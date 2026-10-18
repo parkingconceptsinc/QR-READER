@@ -4,6 +4,8 @@ const stage = $('stage');
 const status = $('status');
 let stream = null;
 let detector = null;
+let detectorMode = 'none';
+let decoderFailed = false;
 let scanning = false;
 let facingMode = 'environment';
 let session = 0;
@@ -18,36 +20,43 @@ let lastDecodedValue = '';
 let lastDecodedAt = 0;
 let restartTimer = null;
 const historyKey = 'lector-qr-history-v1';
-const decoderUrl = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+const decoderUrl = './vendor/jsQR.js';
+const LIVE_SCAN_INTERVAL_MS = 55;
+const FALLBACK_MAX_DIMENSION = 640;
 
 function fallbackDetector() {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { willReadFrequently: true });
+  let frameCount = 0;
   const ready = new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = decoderUrl;
     script.async = true;
-    script.onload = () => {
-      resolve();
-      if ('caches' in window) caches.open('pci-qr-decoder-v1').then(cache => cache.add(decoderUrl)).catch(() => {});
-    };
-    script.onerror = () => reject(new Error('Could not load the QR scanner. Connect to the internet and reload.'));
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('The built-in QR decoder could not load. Reload PCI QR Reader and try again.'));
     document.head.append(script);
   });
   ready.catch(() => {});
   return {
     async detect(source) {
       await ready;
+      if (!window.jsQR || !context) throw new Error('The built-in QR decoder is unavailable.');
       const width = source.videoWidth || source.width;
       const height = source.videoHeight || source.height;
-      const scale = Math.min(1, (source === video ? 720 : 1600) / Math.max(width, height));
-      const targetWidth = Math.round(width * scale);
-      const targetHeight = Math.round(height * scale);
+      if (!width || !height) return [];
+      const isLiveVideo = source === video;
+      const maxDimension = isLiveVideo ? FALLBACK_MAX_DIMENSION : 1600;
+      const scale = Math.min(1, maxDimension / Math.max(width, height));
+      const targetWidth = Math.max(1, Math.round(width * scale));
+      const targetHeight = Math.max(1, Math.round(height * scale));
       if (canvas.width !== targetWidth) canvas.width = targetWidth;
       if (canvas.height !== targetHeight) canvas.height = targetHeight;
-      context.drawImage(source, 0, 0, canvas.width, canvas.height);
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-      const code = window.jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: 'attemptBoth' });
+      context.drawImage(source, 0, 0, targetWidth, targetHeight);
+      const pixels = context.getImageData(0, 0, targetWidth, targetHeight);
+      // Most QR codes are normally oriented. Check inverted codes periodically to
+      // keep routine frames fast without losing support for unusual labels.
+      const inversionAttempts = !isLiveVideo || ++frameCount % 5 === 0 ? 'attemptBoth' : 'dontInvert';
+      const code = window.jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts });
       return code ? [{ rawValue: code.data }] : [];
     }
   };
@@ -136,7 +145,13 @@ function stopCamera() {
 }
 
 async function startCamera(force = false) {
-  if (force) manuallyStopped = false;
+  if (force) {
+    manuallyStopped = false;
+    if (decoderFailed && detectorMode === 'jsqr') {
+      detectorFailed = false;
+      detector = fallbackDetector();
+    }
+  }
   if (manuallyStopped || starting || scanning || document.hidden || navigating) return;
   if (!detector) return say('This browser does not support QR scanning. Try an up-to-date version of Chrome or Edge.', true);
   if (!navigator.mediaDevices?.getUserMedia) return say('Camera access requires HTTPS or localhost.', true);
@@ -149,8 +164,27 @@ async function startCamera(force = false) {
   try {
     // Prefer the rear camera without requiring an exact match; strict constraints can
     // reject valid Android camera devices and leave the preview blank.
-    const videoConstraints = { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } };
-    const openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
+    const videoConstraints = {
+      facingMode: { ideal: facingMode },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30, max: 30 }
+    };
+    let openedStream;
+    try {
+      openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
+    } catch (cameraError) {
+      if (!['OverconstrainedError', 'NotFoundError'].includes(cameraError.name)) throw cameraError;
+      try {
+        openedStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: facingMode } }
+        });
+      } catch (fallbackError) {
+        if (!['OverconstrainedError', 'NotFoundError'].includes(fallbackError.name)) throw fallbackError;
+        openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+      }
+    }
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     stream = openedStream;
     video.muted = true;
@@ -167,7 +201,9 @@ async function startCamera(force = false) {
     stage.classList.add('active');
     $('liveBadge').hidden = false;
     $('switchButton').hidden = false;
-    $('torchButton').hidden = !stream.getVideoTracks()[0].getCapabilities?.().torch;
+    let torchAvailable = false;
+    try { torchAvailable = Boolean(stream.getVideoTracks()[0].getCapabilities?.().torch); } catch {}
+    $('torchButton').hidden = !torchAvailable;
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
     $('cameraHint').textContent = "Center the code · Scan again whenever you're ready";
     say('Scanning automatically. Point at a QR code.');
@@ -197,10 +233,10 @@ function scheduleScan(activeSession) {
 }
 
 async function scanFrame(activeSession) {
-  if (!scanning || activeSession !== session) return;
+  if (!scanning || activeSession !== session || decoderFailed) return;
   const now = performance.now();
-  if (detectorBusy) return;
-  if (now - lastScanAt < 90) { scheduleScan(activeSession); return; }
+  if (detectorBusy) { scheduleScan(activeSession); return; }
+  if (now - lastScanAt < LIVE_SCAN_INTERVAL_MS) { scheduleScan(activeSession); return; }
   if (video.readyState >= 2) {
     detectorBusy = true;
     lastScanAt = now;
@@ -211,7 +247,7 @@ async function scanFrame(activeSession) {
       if (codes.length) {
         const value = codes[0].rawValue;
         const time = Date.now();
-        if (value === lastDecodedValue && time - lastDecodedAt < 3500) {
+        if (value === lastDecodedValue && time - lastDecodedAt < 1200) {
           scheduleScan(activeSession);
           return;
         }
@@ -231,10 +267,17 @@ async function scanFrame(activeSession) {
     } catch (error) {
       detectorBusy = false;
       if (activeSession !== session) return;
-      if (error.name === 'NotSupportedError') detector = fallbackDetector();
-      if (error.message?.startsWith('Could not load')) {
+      if (error.name === 'NotSupportedError' && detectorMode === 'native') {
+        detector = fallbackDetector();
+        detectorMode = 'jsqr';
+        decoderFailed = false;
+      } else if (error.message?.startsWith('The built-in QR decoder')) {
+        // Leave the preview running and make the failure actionable instead of
+        // shutting down the camera and forcing the user to reopen the app.
+        decoderFailed = true;
         say(error.message, true);
-        stopCamera();
+        $('cameraHint').textContent = 'Camera is on · Tap Start scanning to retry';
+        $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry scanner';
       }
     }
   }
@@ -340,9 +383,17 @@ window.addEventListener('pageshow', () => {
 });
 
 if ('BarcodeDetector' in window) {
-  try { detector = new BarcodeDetector({ formats: ['qr_code'] }); }
-  catch { detector = fallbackDetector(); }
-} else detector = fallbackDetector();
+  try {
+    detector = new BarcodeDetector({ formats: ['qr_code'] });
+    detectorMode = 'native';
+  } catch {
+    detector = fallbackDetector();
+    detectorMode = 'jsqr';
+  }
+} else {
+  detector = fallbackDetector();
+  detectorMode = 'jsqr';
+}
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(registration => registration.update()).catch(() => {});
 renderHistory();
 startCamera();
