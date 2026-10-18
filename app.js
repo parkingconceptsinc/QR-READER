@@ -68,8 +68,12 @@ function say(message, error = false) {
 }
 
 function getHistory() {
-  try { return JSON.parse(localStorage.getItem(historyKey)) || []; }
-  catch { return []; }
+  try {
+    const items = JSON.parse(localStorage.getItem(historyKey));
+    return Array.isArray(items)
+      ? items.filter(item => item && typeof item.value === 'string' && Number.isFinite(item.time))
+      : [];
+  } catch { return []; }
 }
 
 function renderHistory() {
@@ -99,7 +103,7 @@ function showResult(value, save = true) {
     items.unshift({ value, time: Date.now() });
     try { localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 10))); } catch {}
     renderHistory();
-    if (navigator.vibrate) navigator.vibrate(80);
+    try { navigator.vibrate?.(25); } catch {}
   }
   if (save && url) {
     if (navigating) return;
@@ -243,7 +247,12 @@ async function scanFrame(activeSession) {
     try {
       const codes = await detector.detect(video);
       detectorBusy = false;
-      if (!scanning || activeSession !== session) return;
+      if (!scanning || activeSession !== session) {
+        // A frame from the prior camera can finish after a quick restart. Re-arm
+        // scanning for the current session so one stale decode cannot stall it.
+        if (scanning && !decoderFailed) scheduleScan(session);
+        return;
+      }
       if (codes.length) {
         const value = codes[0].rawValue;
         const time = Date.now();
@@ -266,7 +275,10 @@ async function scanFrame(activeSession) {
       }
     } catch (error) {
       detectorBusy = false;
-      if (activeSession !== session) return;
+      if (activeSession !== session) {
+        if (scanning && !decoderFailed) scheduleScan(session);
+        return;
+      }
       if (error.name === 'NotSupportedError' && detectorMode === 'native') {
         detector = fallbackDetector();
         detectorMode = 'jsqr';
