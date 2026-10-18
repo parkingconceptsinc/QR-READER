@@ -77,6 +77,13 @@ function renderHistory() {
 
 function showResult(value, save = true) {
   const url = safeUrl(value);
+  if (save) {
+    const items = getHistory().filter(item => item.value !== value);
+    items.unshift({ value, time: Date.now() });
+    try { localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 10))); } catch {}
+    renderHistory();
+    if (navigator.vibrate) navigator.vibrate(80);
+  }
   if (save && url) {
     if (navigating) return;
     navigating = true;
@@ -88,13 +95,6 @@ function showResult(value, save = true) {
   $('result').hidden = false;
   $('openLink').hidden = !url;
   if (url) $('openLink').href = url;
-  if (save) {
-    const items = getHistory().filter(item => item.value !== value);
-    items.unshift({ value, time: Date.now() });
-    try { localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 10))); } catch {}
-    renderHistory();
-    if (navigator.vibrate) navigator.vibrate(80);
-  }
   say('QR code detected.');
   $('result').scrollIntoView({ behavior: 'instant', block: 'nearest' });
 }
