@@ -11,6 +11,8 @@ let starting = false;
 let resumeOnVisible = false;
 let navigating = false;
 let installPrompt = null;
+let lastScanAt = 0;
+let detectorBusy = false;
 const historyKey = 'lector-qr-history-v1';
 const decoderUrl = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
 
@@ -60,8 +62,10 @@ function getHistory() {
 function renderHistory() {
   const items = getHistory();
   $('historyList').replaceChildren();
-  $('emptyHistory').hidden = items.length > 0;
-  $('clearButton').hidden = items.length === 0;
+  $('emptyHistory').hidden = items.length > 0 || !$('historyWrap').hidden;
+  $('clearButton').hidden = items.length === 0 || $('historyWrap').hidden;
+  $('historyToggle').textContent = $('historyWrap').hidden ? `Show${items.length ? ` (${items.length})` : ''}` : 'Hide';
+  $('historyToggle').setAttribute('aria-expanded', String(!$('historyWrap').hidden));
   for (const item of items) {
     const li = document.createElement('li');
     const value = document.createElement('span');
@@ -97,7 +101,7 @@ function showResult(value, save = true) {
   $('openLink').hidden = !url;
   if (url) $('openLink').href = url;
   say('QR code detected.');
-  $('result').scrollIntoView({ behavior: 'instant', block: 'nearest' });
+  $('result').scrollIntoView({ behavior: 'auto', block: 'nearest' });
 }
 
 function safeUrl(value) {
@@ -121,7 +125,8 @@ function stopCamera() {
   $('liveBadge').hidden = true;
   $('switchButton').hidden = true;
   $('torchButton').hidden = true;
-  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start camera';
+  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start scanning';
+  $('cameraHint').textContent = 'Camera starts automatically · Links open instantly';
 }
 
 async function startCamera() {
@@ -155,13 +160,15 @@ async function startCamera() {
     $('liveBadge').hidden = false;
     $('switchButton').hidden = false;
     $('torchButton').hidden = !stream.getVideoTracks()[0].getCapabilities?.().torch;
-    $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop camera';
-    say('Point your camera at the QR code.');
+    $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
+    $('cameraHint').textContent = 'Center the code · It opens automatically';
+    say('Scanning automatically. Point at a QR code.');
     scheduleScan(activeSession);
   } catch (error) {
     if (activeSession !== session) return;
     stopCamera();
-    say(error.name === 'NotAllowedError' ? 'Allow camera access in your browser.' : 'Could not open the camera. Check that it is available.', true);
+    say(error.name === 'NotAllowedError' ? 'Camera permission needed. Allow access, then tap Start scanning.' : 'Camera unavailable. Check permission or close another app using the camera.', true);
+    $('cameraHint').textContent = 'Allow camera access to start scanning';
   }
 }
 
@@ -173,9 +180,14 @@ function scheduleScan(activeSession) {
 
 async function scanFrame(activeSession) {
   if (!scanning || activeSession !== session) return;
+  const now = performance.now();
+  if (detectorBusy || now - lastScanAt < 90) { scheduleScan(activeSession); return; }
   if (video.readyState >= 2) {
+    detectorBusy = true;
+    lastScanAt = now;
     try {
       const codes = await detector.detect(video);
+      detectorBusy = false;
       if (!scanning || activeSession !== session) return;
       if (codes.length) {
         stopCamera();
@@ -183,6 +195,7 @@ async function scanFrame(activeSession) {
         return;
       }
     } catch (error) {
+      detectorBusy = false;
       if (activeSession !== session) return;
       if (error.name === 'NotSupportedError') detector = fallbackDetector();
       if (error.message?.startsWith('Could not load')) {
@@ -236,6 +249,11 @@ $('copyButton').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('resultValue').textContent); say('Content copied.'); }
   catch { say('Could not copy the content.', true); }
 });
+$('historyToggle').addEventListener('click', () => {
+  const opening = $('historyWrap').hidden;
+  $('historyWrap').hidden = !opening;
+  renderHistory();
+});
 $('clearButton').addEventListener('click', () => {
   localStorage.removeItem(historyKey);
   renderHistory();
@@ -280,6 +298,6 @@ if ('BarcodeDetector' in window) {
   try { detector = new BarcodeDetector({ formats: ['qr_code'] }); }
   catch { detector = fallbackDetector(); }
 } else detector = fallbackDetector();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').then(registration => registration.update()).catch(() => {});
 renderHistory();
 startCamera();
