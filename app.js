@@ -181,7 +181,8 @@ function scheduleScan(activeSession) {
 async function scanFrame(activeSession) {
   if (!scanning || activeSession !== session) return;
   const now = performance.now();
-  if (detectorBusy || now - lastScanAt < 90) { scheduleScan(activeSession); return; }
+  if (detectorBusy) return;
+  if (now - lastScanAt < 90) { scheduleScan(activeSession); return; }
   if (video.readyState >= 2) {
     detectorBusy = true;
     lastScanAt = now;
