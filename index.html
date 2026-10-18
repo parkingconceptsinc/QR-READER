@@ -21,7 +21,7 @@
     <section class="intro">
       <p class="eyebrow">SCAN IN SECONDS</p>
       <h1>It all starts<br>with a <em>scan.</em></h1>
-      <p>Point your camera at a QR code or choose an image. Website links open automatically.</p>
+      <p>Point your camera at a QR code or choose an image. Scan instantly. Open links without leaving the scanner.</p>
     </section>
 
     <section class="scanner" aria-label="QR code scanner">
@@ -29,12 +29,12 @@
         <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
         <div class="camera-placeholder" id="placeholder">
           <div class="placeholder-icon" aria-hidden="true">⌗</div>
-          <strong>Ready for the next scan</strong>
+          <strong>Ready for your next scan</strong>
           <span>Keep the QR inside the frame</span>
         </div>
         <div class="scan-frame" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="scan-line"></div></div>
         <div class="live-badge" id="liveBadge" hidden><i></i> LIVE SCAN</div>
-        <div class="camera-hint" id="cameraHint">Camera starts automatically · Links open instantly</div>
+        <div class="camera-hint" id="cameraHint">Scanner stays ready · Tap to open links</div>
       </div>
       <div class="controls">
         <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Start scanning</button>
@@ -61,7 +61,7 @@
       <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
       <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
     </section>
-    <footer>PCI QR · Fast, private, on-device scanning</footer>
+    <footer>PCI QR · Scan fast. Stay ready. Scan again.</footer>
   </main>
   <script src="./app.js" defer></script>
 </body>
