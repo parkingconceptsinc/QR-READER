@@ -1,5 +1,5 @@
-const CACHE = 'lector-qr-v17';
-const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=15', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
+const CACHE = 'lector-qr-v18';
+const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=15', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png', './icons/pci-logo-optimized.webp'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
