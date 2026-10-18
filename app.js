@@ -145,22 +145,19 @@ async function startCamera(force = false) {
   starting = true;
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Opening camera…';
   $('cameraButton').disabled = true;
-  say('Opening camera…');
+  say('Requesting camera access…');
   try {
-    const videoConstraints = { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } };
-    let openedStream;
-    try {
-      openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
-    } catch (cameraError) {
-      // Keep permission/security errors visible, but retry camera selection more broadly for Android devices.
-      if (cameraError.name === 'NotAllowedError' || cameraError.name === 'SecurityError') throw cameraError;
-      openedStream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
-    }
+    // Prefer the rear camera without requiring an exact match; strict constraints can
+    // reject valid Android camera devices and leave the preview blank.
+    const videoConstraints = { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } };
+    const openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     stream = openedStream;
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
     video.srcObject = stream;
     await video.play();
     if (activeSession !== session) return;
@@ -179,14 +176,17 @@ async function startCamera(force = false) {
     if (activeSession !== session) return;
     stopCamera();
     const message = error.name === 'NotAllowedError' || error.name === 'SecurityError'
-      ? 'Camera permission is blocked. Allow camera access in your browser settings, then tap Start scanning.'
+      ? 'Camera access was denied or blocked. Allow camera access for this site/app in browser settings, then tap Start scanning.'
       : error.name === 'NotFoundError'
         ? 'No camera was found on this device.'
         : error.name === 'NotReadableError'
           ? 'The camera is busy. Close other apps using it, then tap Start scanning.'
-          : 'Camera could not start. Check permission and try Start scanning again.';
+          : error.name === 'OverconstrainedError'
+            ? 'The selected camera is not available. Tap Start scanning to retry.'
+            : error.message || 'Camera could not start. Check permission and try Start scanning again.';
     say(message, true);
-    $('cameraHint').textContent = 'Camera could not start · Check permission and retry';
+    $('cameraHint').textContent = message;
+    $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Tap to enable camera';
   }
 }
 
