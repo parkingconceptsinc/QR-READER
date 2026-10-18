@@ -123,7 +123,7 @@ function stopCamera() {
   $('switchButton').hidden = true;
   $('torchButton').hidden = true;
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start scanning';
-  $('cameraHint').textContent = 'Camera starts automatically · Links open instantly';
+  $('cameraHint').textContent = 'Scanner stays ready · Tap to open links';
 }
 
 async function startCamera() {
@@ -158,7 +158,7 @@ async function startCamera() {
     $('switchButton').hidden = false;
     $('torchButton').hidden = !stream.getVideoTracks()[0].getCapabilities?.().torch;
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
-    $('cameraHint').textContent = 'Center the code · It opens automatically';
+    $('cameraHint').textContent = 'Center the code · Scan again whenever you're ready';
     say('Scanning automatically. Point at a QR code.');
     scheduleScan(activeSession);
   } catch (error) {
@@ -226,8 +226,13 @@ async function readFile(file) {
     const bitmap = await createImageBitmap(file);
     try {
       const codes = await detector.detect(bitmap);
-      if (codes.length) showResult(codes[0].rawValue);
-      else say('No QR code was found in the image.', true);
+      if (codes.length) {
+        showResult(codes[0].rawValue);
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => {
+          if (!document.hidden) startCamera();
+        }, 650);
+      } else say('No QR code was found in the image.', true);
     } finally { bitmap.close(); }
   } catch { say('Could not read the image. Choose a valid image file.', true); }
 }
