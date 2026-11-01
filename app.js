@@ -153,24 +153,26 @@ async function findBestRearCamera(currentDeviceId) {
 async function applyTorch(track, on) {
   let capabilities;
   try { capabilities = track.getCapabilities?.(); } catch {}
-  if (capabilities?.torch === false) throw new Error('Torch is not supported by this camera.');
+  if (capabilities?.torch === false) {
+    const error = new Error('This camera does not expose flashlight control to the browser.');
+    error.name = 'TorchUnavailableError';
+    throw error;
+  }
+
+  // The torch is an advanced MediaTrack constraint. Android Chrome does not
+  // grant a separate flash permission; it is controlled by the active camera
+  // permission and this user-initiated switch.
   const current = track.getConstraints?.() || {};
-  const previousAdvanced = Array.isArray(current.advanced) ? current.advanced : [];
-  const advanced = previousAdvanced.filter(item => !Object.prototype.hasOwnProperty.call(item, 'torch'));
-  let advancedError = null;
-  try {
-    await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
-  } catch (error) { advancedError = error; }
+  const advanced = (Array.isArray(current.advanced) ? current.advanced : [])
+    .filter(item => !Object.prototype.hasOwnProperty.call(item, 'torch'));
+  await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
+
   let state;
   try { state = track.getSettings?.().torch; } catch {}
-  if (state === on || (capabilities?.torch === true && state === undefined && !advancedError)) return;
-  try {
-    await track.applyConstraints({ ...current, torch: on, advanced });
-  } catch (error) {
-    throw new Error(error?.message || advancedError?.message || 'Torch control is unavailable.');
-  }
-  try { state = track.getSettings?.().torch; } catch {}
-  if (state !== on) throw new Error('The camera did not confirm the flashlight state.');
+  if (state === on || (state === undefined && capabilities?.torch !== false)) return;
+  const error = new Error('The camera did not confirm the flashlight state.');
+  error.name = 'TorchUnavailableError';
+  throw error;
 }
 
 function showCameraFailure(message) {
@@ -570,8 +572,12 @@ $('torchButton').addEventListener('click', async () => {
     $('torchButton').setAttribute('aria-label', on ? 'Turn flashlight off' : 'Turn flashlight on');
     $('torchButton').setAttribute('aria-pressed', String(on));
     say(on ? 'Flashlight on.' : 'Flashlight off.');
-  } catch {
-    say('Flashlight control failed. Check camera permission and device support.', true);
+  } catch (error) {
+    const message = error?.name === 'TorchUnavailableError' || error?.name === 'OverconstrainedError' || error?.name === 'NotSupportedError'
+      ? 'No separate flash permission exists in Android. This camera did not expose its flashlight to the browser. Keep Camera allowed in site settings and try the main rear camera in Chrome.'
+      : 'Flashlight could not turn on. Keep Camera allowed in site settings and try again.';
+    say(message, true);
+    $('cameraHint').textContent = message;
   } finally {
     $('torchButton').disabled = false;
   }
