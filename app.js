@@ -223,9 +223,9 @@ async function startCamera(force = false) {
     stage.classList.add('active');
     $('liveBadge').hidden = false;
     $('switchButton').hidden = false;
-    let torchAvailable = false;
-    try { torchAvailable = Boolean(stream.getVideoTracks()[0].getCapabilities?.().torch); } catch {}
-    $('torchButton').hidden = !torchAvailable;
+    // Keep the flashlight control available on rear cameras. Some mobile browsers
+    // support the torch constraint but omit it from getCapabilities().
+    $('torchButton').hidden = facingMode !== 'environment';
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
     $('cameraHint').textContent = "Center the code · Scan again whenever you're ready";
     say('Scanning automatically. Point at a QR code.');
@@ -351,13 +351,21 @@ $('switchButton').addEventListener('click', () => {
 });
 $('torchButton').addEventListener('click', async () => {
   const track = stream?.getVideoTracks()[0];
-  if (!track) return;
+  if (!track || facingMode !== 'environment') return;
   const on = !$('torchButton').classList.contains('on');
   try {
-    await track.applyConstraints({ advanced: [{ torch: on }] });
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on }] });
+    } catch {
+      // A few browser builds accept torch as a top-level track constraint.
+      await track.applyConstraints({ torch: on });
+    }
     $('torchButton').classList.toggle('on', on);
     $('torchButton').setAttribute('aria-label', on ? 'Turn flashlight off' : 'Turn flashlight on');
-  } catch { say('The flashlight is not available on this camera.', true); }
+    say(on ? 'Flashlight on.' : 'Flashlight off.');
+  } catch {
+    say('This camera or browser does not allow flashlight control.', true);
+  }
 });
 $('fileInput').addEventListener('change', event => {
   readFile(event.target.files[0]);
