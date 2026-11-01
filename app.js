@@ -138,18 +138,6 @@ function scoreRearCamera(device) {
   return score;
 }
 
-async function findBestRearCamera(currentDeviceId) {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cameras = devices
-      .filter(device => device.kind === 'videoinput')
-      .map(device => ({ device, score: scoreRearCamera(device) }))
-      .filter(entry => Number.isFinite(entry.score) && entry.score >= 100)
-      .sort((a, b) => b.score - a.score);
-    return cameras[0]?.device.deviceId || currentDeviceId || null;
-  } catch { return currentDeviceId || null; }
-}
-
 async function applyTorch(track, on) {
   let capabilities;
   try { capabilities = track.getCapabilities?.(); } catch {}
@@ -379,31 +367,9 @@ async function startCamera(force = false) {
     }
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     if (facingMode === 'environment') {
-      const initialTrack = openedStream.getVideoTracks()[0];
-      const currentId = initialTrack?.getSettings?.().deviceId || null;
-      const preferredId = await findBestRearCamera(currentId);
-      if (preferredId && preferredId !== currentId) {
-        // Release the first camera before opening another rear lens; mobile browsers
-        // often refuse two simultaneous streams from the same camera module.
-        openedStream.getTracks().forEach(track => track.stop());
-        try {
-          openedStream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: { ...videoConstraints, deviceId: { exact: preferredId } }
-          });
-          rearCameraDeviceId = preferredId;
-        } catch {
-          // Reopen the browser-selected rear camera if the preferred labeled lens fails.
-          openedStream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: { ...videoConstraints, facingMode: { ideal: 'environment' } }
-          });
-          rearCameraDeviceId = openedStream.getVideoTracks()[0]?.getSettings?.().deviceId || currentId;
-        }
-      } else {
-        rearCameraDeviceId = preferredId || currentId;
-      }
-      if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
+      // Keep the rear camera selected by the browser. Replacing it based on
+      // device labels can switch to an auxiliary lens without LED control.
+      rearCameraDeviceId = openedStream.getVideoTracks()[0]?.getSettings?.().deviceId || rearCameraDeviceId;
     }
     stream = openedStream;
     video.muted = true;
@@ -665,7 +631,7 @@ if ('serviceWorker' in navigator) {
   let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) { hadController = true; return; }
-    const refreshKey = 'qr-reader-worker-v25';
+    const refreshKey = 'qr-reader-worker-v26';
     if (sessionStorage.getItem(refreshKey)) return;
     sessionStorage.setItem(refreshKey, '1');
     location.reload();
