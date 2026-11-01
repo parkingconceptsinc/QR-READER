@@ -9,6 +9,11 @@ let decoderFailed = false;
 let scanning = false;
 let facingMode = 'environment';
 let rearCameraDeviceId = null;
+let cameraRecoveryAttempts = 0;
+let cameraRecoveryTimer = null;
+let cameraMuteTimer = null;
+let cameraStableTimer = null;
+let detectorErrorCount = 0;
 let session = 0;
 let starting = false;
 let resumeOnVisible = false;
@@ -168,6 +173,51 @@ async function applyTorch(track, on) {
   if (state !== on) throw new Error('The camera did not confirm the flashlight state.');
 }
 
+function showCameraFailure(message) {
+  stopCamera();
+  say(message, true);
+  $('cameraHint').textContent = 'Camera unavailable · Check permissions or close other apps, then retry';
+  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
+}
+
+function handleUnexpectedCameraLoss(activeSession, message) {
+  if (activeSession !== session || !scanning || manuallyStopped || document.hidden || navigating || cameraRecoveryTimer) return;
+  if (cameraRecoveryAttempts >= 2) {
+    showCameraFailure('The camera disconnected repeatedly. Close other apps using the camera, then tap Retry camera.');
+    return;
+  }
+  cameraRecoveryAttempts++;
+  stopCamera();
+  say(message + ' Reconnecting…');
+  $('cameraHint').textContent = 'Camera interrupted · Reconnecting automatically';
+  const delay = 300 * cameraRecoveryAttempts;
+  cameraRecoveryTimer = setTimeout(() => {
+    cameraRecoveryTimer = null;
+    if (!document.hidden && !manuallyStopped && !navigating) startCamera();
+  }, delay);
+}
+
+function monitorCameraTrack(track, activeSession) {
+  if (!track?.addEventListener) return;
+  track.addEventListener('ended', () => {
+    handleUnexpectedCameraLoss(activeSession, 'Camera disconnected.');
+  });
+  track.addEventListener('mute', () => {
+    if (activeSession !== session || !scanning || manuallyStopped) return;
+    clearTimeout(cameraMuteTimer);
+    cameraMuteTimer = setTimeout(() => {
+      cameraMuteTimer = null;
+      if (activeSession === session && track.muted) {
+        handleUnexpectedCameraLoss(activeSession, 'Camera signal was interrupted.');
+      }
+    }, 1400);
+  });
+  track.addEventListener('unmute', () => {
+    clearTimeout(cameraMuteTimer);
+    cameraMuteTimer = null;
+  });
+}
+
 function say(message, error = false) {
   status.textContent = message;
   status.classList.toggle('error', error);
@@ -240,13 +290,25 @@ function stopCamera() {
   session++;
   starting = false;
   scanning = false;
+  clearTimeout(restartTimer);
+  restartTimer = null;
+  clearTimeout(cameraRecoveryTimer);
+  cameraRecoveryTimer = null;
+  clearTimeout(cameraMuteTimer);
+  cameraMuteTimer = null;
+  clearTimeout(cameraStableTimer);
+  cameraStableTimer = null;
   $('cameraButton').disabled = false;
   $('torchButton').classList.remove('on');
   $('torchButton').setAttribute('aria-label', 'Turn flashlight on');
   $('torchButton').setAttribute('aria-pressed', 'false');
-  if (stream) stream.getTracks().forEach(track => track.stop());
+  if (stream) stream.getTracks().forEach(track => {
+    try { track.stop(); } catch {}
+  });
   stream = null;
   video.srcObject = null;
+  video.style.transform = '';
+  delete video.dataset.softwareZoom;
   stage.classList.remove('active');
   $('liveBadge').hidden = true;
   $('switchButton').hidden = true;
@@ -264,8 +326,10 @@ async function startCamera(force = false) {
     }
   }
   if (manuallyStopped || starting || scanning || document.hidden || navigating) return;
-  if (!detector) return say('This browser does not support QR scanning. Try an up-to-date version of Chrome or Edge.', true);
-  if (!navigator.mediaDevices?.getUserMedia) return say('Camera access requires HTTPS or localhost.', true);
+  if (!detector) return showCameraFailure('This browser does not support QR scanning. Try an up-to-date version of Chrome or Edge.');
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    return showCameraFailure('Camera access requires a secure HTTPS page. Open the QR Reader website in Chrome or Edge.');
+  }
   stopCamera();
   const activeSession = session;
   starting = true;
@@ -344,6 +408,13 @@ async function startCamera(force = false) {
     video.style.transform = 'scale(' + softwareZoom + ')';
     starting = false;
     scanning = true;
+    cameraRecoveryTimer = null;
+    clearTimeout(cameraStableTimer);
+    cameraStableTimer = setTimeout(() => {
+      cameraRecoveryAttempts = 0;
+      cameraStableTimer = null;
+    }, 8000);
+    detectorErrorCount = 0;
     $('cameraButton').disabled = false;
     stage.classList.add('active');
     $('liveBadge').hidden = false;
@@ -351,6 +422,7 @@ async function startCamera(force = false) {
     // Keep the flashlight control available on rear cameras. Some mobile browsers
     // support the torch constraint but omit it from getCapabilities().
     $('torchButton').hidden = facingMode !== 'environment';
+    monitorCameraTrack(stream.getVideoTracks()[0], activeSession);
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
     $('cameraHint').textContent = "Center the code · Scan again whenever you're ready";
     say('Scanning automatically. Point at a QR code.');
@@ -359,7 +431,7 @@ async function startCamera(force = false) {
     if (activeSession !== session) return;
     stopCamera();
     const message = error.name === 'NotAllowedError' || error.name === 'SecurityError'
-      ? 'Camera access was denied or blocked. Allow camera access for this site/app in browser settings, then tap Start scanning.'
+      ? 'Camera permission is blocked. In Chrome, open the site controls beside the address bar → Site settings → Camera → Allow. In Windows, enable Settings → Privacy & security → Camera. Then reload and tap Retry camera.'
       : error.name === 'NotFoundError'
         ? 'No camera was found on this device.'
         : error.name === 'NotReadableError'
@@ -369,7 +441,7 @@ async function startCamera(force = false) {
             : error.message || 'Camera could not start. Check permission and try Start scanning again.';
     say(message, true);
     $('cameraHint').textContent = message;
-    $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Tap to enable camera';
+    $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
   }
 }
 
@@ -389,8 +461,10 @@ async function scanFrame(activeSession) {
     detectorBusy = true;
     lastScanAt = now;
     try {
-      const codes = await detector.detect(captureScanRegion());
+      const activeDetector = detector;
+      const codes = await activeDetector.detect(captureScanRegion());
       detectorBusy = false;
+      detectorErrorCount = 0;
       if (!scanning || activeSession !== session) {
         // A frame from the prior camera can finish after a quick restart. Re-arm
         // scanning for the current session so one stale decode cannot stall it.
@@ -409,12 +483,7 @@ async function scanFrame(activeSession) {
         stopCamera();
         showResult(value);
         // Non-URL QR codes remain in the scanner and the camera resumes quickly.
-        if (!safeUrl(value)) {
-          clearTimeout(restartTimer);
-          restartTimer = setTimeout(() => {
-            if (!document.hidden) startCamera();
-          }, 350);
-        }
+        if (!safeUrl(value)) scheduleCameraRestart(350);
         return;
       }
     } catch (error) {
@@ -423,24 +492,36 @@ async function scanFrame(activeSession) {
         if (scanning && !decoderFailed) scheduleScan(session);
         return;
       }
-      if (error.name === 'NotSupportedError' && detectorMode === 'native') {
+      detectorErrorCount++;
+      if (detectorMode === 'native' &&
+          (error.name === 'NotSupportedError' || error.name === 'TypeError' || detectorErrorCount >= 2)) {
         detector = fallbackDetector();
         detectorMode = 'jsqr';
+        detectorErrorCount = 0;
         decoderFailed = false;
-      } else if (error.message?.startsWith('The built-in QR decoder')) {
-        // Leave the preview running and make the failure actionable instead of
-        // shutting down the camera and forcing the user to reopen the app.
+      } else if (error.message?.startsWith('The built-in QR decoder') || (detectorMode === 'jsqr' && detectorErrorCount >= 3)) {
         decoderFailed = true;
         scanning = false;
         $('cameraButton').disabled = false;
         $('liveBadge').hidden = true;
-        say(error.message, true);
+        const message = error.message?.startsWith('The built-in QR decoder')
+          ? error.message
+          : 'QR scanning paused after repeated errors. Tap Retry scanner.';
+        say(message, true);
         $('cameraHint').textContent = 'Camera preview is on · Tap Retry scanner';
         $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry scanner';
       }
     }
   }
   scheduleScan(activeSession);
+}
+
+function scheduleCameraRestart(delay = 350) {
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    if (!document.hidden && !manuallyStopped && !navigating) startCamera();
+  }, delay);
 }
 
 async function readFile(file) {
@@ -454,13 +535,16 @@ async function readFile(file) {
       const codes = await detector.detect(bitmap);
       if (codes.length) {
         showResult(codes[0].rawValue);
-        clearTimeout(restartTimer);
-        restartTimer = setTimeout(() => {
-          if (!document.hidden) startCamera();
-        }, 650);
-      } else say('No QR code was found in the image.', true);
+        if (!safeUrl(codes[0].rawValue)) scheduleCameraRestart(350);
+      } else {
+        say('No QR code was found in the image.', true);
+        scheduleCameraRestart(350);
+      }
     } finally { bitmap.close(); }
-  } catch { say('Could not read the image. Choose a valid image file.', true); }
+  } catch {
+    say('Could not read the image. Choose a valid image file.', true);
+    scheduleCameraRestart(350);
+  }
 }
 
 $('cameraButton').addEventListener('click', () => {
@@ -564,7 +648,7 @@ if ('serviceWorker' in navigator) {
   let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) { hadController = true; return; }
-    const refreshKey = 'qr-reader-worker-v18';
+    const refreshKey = 'qr-reader-worker-v21';
     if (sessionStorage.getItem(refreshKey)) return;
     sessionStorage.setItem(refreshKey, '1');
     location.reload();
