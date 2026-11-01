@@ -426,7 +426,7 @@ async function startCamera(force = false) {
     $('torchButton').hidden = facingMode !== 'environment';
     monitorCameraTrack(stream.getVideoTracks()[0], activeSession);
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
-    $('cameraHint').textContent = "Center the code · Scan again whenever you're ready";
+    $('cameraHint').textContent = "Center the code · Tap ☼ for flashlight (uses Camera permission)";
     say('Scanning automatically. Point at a QR code.');
     scheduleScan(activeSession);
   } catch (error) {
