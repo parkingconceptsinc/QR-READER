@@ -22,13 +22,17 @@ let lastDecodedAt = 0;
 let restartTimer = null;
 const historyKey = 'lector-qr-history-v1';
 const decoderUrl = './vendor/jsQR.js';
-const LIVE_SCAN_INTERVAL_MS = 55;
-const FALLBACK_MAX_DIMENSION = 960;
+const NATIVE_SCAN_INTERVAL_MS = 33;
+const FALLBACK_SCAN_INTERVAL_MS = 70;
+const FALLBACK_MAX_DIMENSION = 768;
+const SCAN_FRAME_DIMENSION = 768;
+const scanCanvas = document.createElement('canvas');
+const scanContext = scanCanvas.getContext('2d', { willReadFrequently: true });
 const PREFERRED_CAMERA_ZOOM = 2;
 
 function fallbackDetector() {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const canvas = scanCanvas;
+  const context = scanContext;
   let frameCount = 0;
   const ready = new Promise((resolve, reject) => {
     const script = document.createElement('script');
@@ -46,14 +50,14 @@ function fallbackDetector() {
       const width = source.videoWidth || source.width;
       const height = source.videoHeight || source.height;
       if (!width || !height) return [];
-      const isLiveVideo = source === video;
+      const isLiveVideo = source === video || source === canvas;
       const maxDimension = isLiveVideo ? FALLBACK_MAX_DIMENSION : 1600;
       const scale = Math.min(1, maxDimension / Math.max(width, height));
       const targetWidth = Math.max(1, Math.round(width * scale));
       const targetHeight = Math.max(1, Math.round(height * scale));
       if (canvas.width !== targetWidth) canvas.width = targetWidth;
       if (canvas.height !== targetHeight) canvas.height = targetHeight;
-      context.drawImage(source, 0, 0, targetWidth, targetHeight);
+      if (source !== canvas) context.drawImage(source, 0, 0, targetWidth, targetHeight);
       const pixels = context.getImageData(0, 0, targetWidth, targetHeight);
       // Most QR codes are normally oriented. Check inverted codes periodically to
       // keep routine frames fast without losing support for unusual labels.
@@ -64,22 +68,56 @@ function fallbackDetector() {
   };
 }
 
-async function applyPreferredCameraZoom(track) {
+async function applyPreferredCameraSettings(track) {
   if (facingMode !== 'environment') return false;
   try {
-    const range = track.getCapabilities?.().zoom;
-    if (!range || !Number.isFinite(range.max)) return false;
-    const minimum = Number.isFinite(range.min) ? range.min : 1;
-    const target = Math.min(range.max, Math.max(minimum, PREFERRED_CAMERA_ZOOM));
-    if (target <= minimum + 0.05) return false;
+    const capabilities = track.getCapabilities?.() || {};
     const current = track.getConstraints?.() || {};
-    const advanced = Array.isArray(current.advanced)
-      ? current.advanced.filter(item => !Object.prototype.hasOwnProperty.call(item, 'zoom'))
-      : [];
-    await track.applyConstraints({ ...current, advanced: [...advanced, { zoom: target }] });
-    const applied = track.getSettings?.().zoom;
-    return true;
+    const preferred = [];
+    const range = capabilities.zoom;
+    if (range && Number.isFinite(range.max)) {
+      const minimum = Number.isFinite(range.min) ? range.min : 1;
+      const target = Math.min(range.max, Math.max(minimum, PREFERRED_CAMERA_ZOOM));
+      if (target > minimum + 0.05) preferred.push({ zoom: target });
+    }
+    for (const [name, mode] of [
+      ['focusMode', 'continuous'],
+      ['exposureMode', 'continuous'],
+      ['whiteBalanceMode', 'continuous']
+    ]) {
+      if (Array.isArray(capabilities[name]) && capabilities[name].includes(mode)) preferred.push({ [name]: mode });
+    }
+    const supportedNames = new Set(['zoom', 'focusMode', 'exposureMode', 'whiteBalanceMode']);
+    const advanced = (Array.isArray(current.advanced) ? current.advanced : [])
+      .filter(item => !Object.keys(item).some(name => supportedNames.has(name)));
+    if (preferred.length) await track.applyConstraints({ ...current, advanced: [...advanced, ...preferred] });
+    const actualZoom = track.getSettings?.().zoom;
+    return Number.isFinite(actualZoom) ? actualZoom > 1.05 : preferred.some(item => item.zoom);
   } catch { return false; }
+}
+
+function captureScanRegion() {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  const stageRect = stage.getBoundingClientRect();
+  const frameRect = $('scanFrame').getBoundingClientRect();
+  if (!scanContext || !width || !height || !stageRect.width || !stageRect.height || !frameRect.width) return video;
+
+  const fitScale = Math.max(stageRect.width / width, stageRect.height / height);
+  const softwareZoom = Number(video.dataset.softwareZoom || 1);
+  const centerX = width / 2 + (frameRect.left + frameRect.width / 2 - stageRect.left - stageRect.width / 2) / (fitScale * softwareZoom);
+  const centerY = height / 2 + (frameRect.top + frameRect.height / 2 - stageRect.top - stageRect.height / 2) / (fitScale * softwareZoom);
+  const sourceWidth = frameRect.width / (fitScale * softwareZoom);
+  const sourceHeight = frameRect.height / (fitScale * softwareZoom);
+  const sx = Math.max(0, Math.min(width - 1, centerX - sourceWidth / 2));
+  const sy = Math.max(0, Math.min(height - 1, centerY - sourceHeight / 2));
+  const sw = Math.max(1, Math.min(width - sx, sourceWidth));
+  const sh = Math.max(1, Math.min(height - sy, sourceHeight));
+
+  scanCanvas.width = SCAN_FRAME_DIMENSION;
+  scanCanvas.height = SCAN_FRAME_DIMENSION;
+  scanContext.drawImage(video, sx, sy, sw, sh, 0, 0, SCAN_FRAME_DIMENSION, SCAN_FRAME_DIMENSION);
+  return scanCanvas;
 }
 
 function scoreRearCamera(device) {
@@ -87,9 +125,10 @@ function scoreRearCamera(device) {
   if (!label || /front|user|selfie|facetime|frontal|delantera/.test(label)) return -Infinity;
   if (!/back|rear|environment|trasera|posterior/.test(label)) return -Infinity;
   let score = 100;
-  if (/ultra.?wide|ultrawide|0[.,]5x|macro|depth|bokeh/.test(label)) score -= 200;
-  if (/main|primary|standard|normal/.test(label)) score += 20;
-  if (/telephoto|tele\b|[23]x/.test(label)) score += 50;
+  if (/ultra.?wide|ultrawide|0[.,]5x|macro|depth|bokeh|telephoto|tele\b|[23]x/.test(label)) score -= 200;
+  // Prefer the main rear module: it is usually the clearest lens and most likely
+  // to expose the phone's LED torch to the browser.
+  if (/main|primary|standard|normal|wide\b/.test(label)) score += 50;
   if (/camera\s*0|(?:^|\W)0(?:\W|$)/.test(label)) score += 1;
   return score;
 }
@@ -107,7 +146,8 @@ async function findBestRearCamera(currentDeviceId) {
 }
 
 async function applyTorch(track, on) {
-  const capabilities = track.getCapabilities?.();
+  let capabilities;
+  try { capabilities = track.getCapabilities?.(); } catch {}
   if (capabilities?.torch === false) throw new Error('Torch is not supported by this camera.');
   const current = track.getConstraints?.() || {};
   const previousAdvanced = Array.isArray(current.advanced) ? current.advanced : [];
@@ -116,15 +156,16 @@ async function applyTorch(track, on) {
   try {
     await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
   } catch (error) { advancedError = error; }
-  let state = track.getSettings?.().torch;
-  if (state === on || (state === undefined && !advancedError)) return;
+  let state;
+  try { state = track.getSettings?.().torch; } catch {}
+  if (state === on || (capabilities?.torch === true && state === undefined && !advancedError)) return;
   try {
     await track.applyConstraints({ ...current, torch: on, advanced });
   } catch (error) {
     throw new Error(error?.message || advancedError?.message || 'Torch control is unavailable.');
   }
-  state = track.getSettings?.().torch;
-  if (state !== undefined && state !== on) throw new Error('The camera did not turn the flashlight on.');
+  try { state = track.getSettings?.().torch; } catch {}
+  if (state !== on) throw new Error('The camera did not confirm the flashlight state.');
 }
 
 function say(message, error = false) {
@@ -202,6 +243,7 @@ function stopCamera() {
   $('cameraButton').disabled = false;
   $('torchButton').classList.remove('on');
   $('torchButton').setAttribute('aria-label', 'Turn flashlight on');
+  $('torchButton').setAttribute('aria-pressed', 'false');
   if (stream) stream.getTracks().forEach(track => track.stop());
   stream = null;
   video.srcObject = null;
@@ -295,9 +337,11 @@ async function startCamera(force = false) {
     video.srcObject = stream;
     await video.play();
     if (activeSession !== session) return;
-    // Use a small real camera zoom when supported; the browser/device still picks
-    // its preferred rear lens, and devices without zoom keep the full camera view.
-    await applyPreferredCameraZoom(stream.getVideoTracks()[0]);
+    // Keep continuous autofocus/exposure and hardware zoom when supported.
+    const hardwareZoomApplied = await applyPreferredCameraSettings(stream.getVideoTracks()[0]);
+    const softwareZoom = hardwareZoomApplied ? 1 : 1.3;
+    video.dataset.softwareZoom = String(softwareZoom);
+    video.style.transform = 'scale(' + softwareZoom + ')';
     starting = false;
     scanning = true;
     $('cameraButton').disabled = false;
@@ -339,12 +383,13 @@ async function scanFrame(activeSession) {
   if (!scanning || activeSession !== session || decoderFailed) return;
   const now = performance.now();
   if (detectorBusy) return;
-  if (now - lastScanAt < LIVE_SCAN_INTERVAL_MS) { scheduleScan(activeSession); return; }
+  const scanInterval = detectorMode === 'native' ? NATIVE_SCAN_INTERVAL_MS : FALLBACK_SCAN_INTERVAL_MS;
+  if (now - lastScanAt < scanInterval) { scheduleScan(activeSession); return; }
   if (video.readyState >= 2) {
     detectorBusy = true;
     lastScanAt = now;
     try {
-      const codes = await detector.detect(video);
+      const codes = await detector.detect(captureScanRegion());
       detectorBusy = false;
       if (!scanning || activeSession !== session) {
         // A frame from the prior camera can finish after a quick restart. Re-arm
@@ -439,6 +484,7 @@ $('torchButton').addEventListener('click', async () => {
     await applyTorch(track, on);
     $('torchButton').classList.toggle('on', on);
     $('torchButton').setAttribute('aria-label', on ? 'Turn flashlight off' : 'Turn flashlight on');
+    $('torchButton').setAttribute('aria-pressed', String(on));
     say(on ? 'Flashlight on.' : 'Flashlight off.');
   } catch {
     say('Flashlight control failed. Check camera permission and device support.', true);
