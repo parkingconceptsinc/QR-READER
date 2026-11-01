@@ -8,6 +8,8 @@ let detectorMode = 'none';
 let decoderFailed = false;
 let scanning = false;
 let facingMode = 'environment';
+let rearCameraDeviceId = null;
+let cameraZoom = 1;
 let session = 0;
 let starting = false;
 let resumeOnVisible = false;
@@ -23,7 +25,7 @@ const historyKey = 'lector-qr-history-v1';
 const decoderUrl = './vendor/jsQR.js';
 const LIVE_SCAN_INTERVAL_MS = 55;
 const FALLBACK_MAX_DIMENSION = 960;
-const PREFERRED_CAMERA_ZOOM = 1.6;
+const PREFERRED_CAMERA_ZOOM = 2;
 
 function fallbackDetector() {
   const canvas = document.createElement('canvas');
@@ -63,17 +65,68 @@ function fallbackDetector() {
   };
 }
 
-function applyPreferredCameraZoom(track) {
-  if (facingMode !== 'environment' || typeof track?.getCapabilities !== 'function') return;
+async function applyPreferredCameraZoom(track) {
+  if (facingMode !== 'environment') return false;
   try {
-    const range = track.getCapabilities().zoom;
-    if (!range || !Number.isFinite(range.max)) return;
+    const range = track.getCapabilities?.().zoom;
+    if (!range || !Number.isFinite(range.max)) return false;
     const minimum = Number.isFinite(range.min) ? range.min : 1;
     const target = Math.min(range.max, Math.max(minimum, PREFERRED_CAMERA_ZOOM));
-    if (target <= minimum + 0.05) return;
-    // Keep zoom optional: unsupported controls must never prevent camera startup.
-    track.applyConstraints({ advanced: [{ zoom: target }] }).catch(() => {});
-  } catch {}
+    if (target <= minimum + 0.05) return false;
+    const current = track.getConstraints?.() || {};
+    const advanced = Array.isArray(current.advanced)
+      ? current.advanced.filter(item => !Object.prototype.hasOwnProperty.call(item, 'zoom'))
+      : [];
+    await track.applyConstraints({ ...current, advanced: [...advanced, { zoom: target }] });
+    const applied = track.getSettings?.().zoom;
+    cameraZoom = Number.isFinite(applied) ? applied : target;
+    return true;
+  } catch { return false; }
+}
+
+function scoreRearCamera(device) {
+  const label = (device.label || '').toLowerCase();
+  if (!label || /front|user|selfie|facetime|frontal|delantera/.test(label)) return -Infinity;
+  if (!/back|rear|environment|trasera|posterior/.test(label)) return -Infinity;
+  let score = 100;
+  if (/ultra.?wide|ultrawide|0[.,]5x|macro|depth|bokeh/.test(label)) score -= 200;
+  if (/main|primary|standard|normal/.test(label)) score += 20;
+  if (/telephoto|tele\b|[23]x/.test(label)) score += 50;
+  if (/camera\s*0|(?:^|\W)0(?:\W|$)/.test(label)) score += 1;
+  return score;
+}
+
+async function findBestRearCamera(currentDeviceId) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices
+      .filter(device => device.kind === 'videoinput')
+      .map(device => ({ device, score: scoreRearCamera(device) }))
+      .filter(entry => Number.isFinite(entry.score) && entry.score >= 100)
+      .sort((a, b) => b.score - a.score);
+    return cameras[0]?.device.deviceId || currentDeviceId || null;
+  } catch { return currentDeviceId || null; }
+}
+
+async function applyTorch(track, on) {
+  const capabilities = track.getCapabilities?.();
+  if (capabilities?.torch === false) throw new Error('Torch is not supported by this camera.');
+  const current = track.getConstraints?.() || {};
+  const previousAdvanced = Array.isArray(current.advanced) ? current.advanced : [];
+  const advanced = previousAdvanced.filter(item => !Object.prototype.hasOwnProperty.call(item, 'torch'));
+  let advancedError = null;
+  try {
+    await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
+  } catch (error) { advancedError = error; }
+  let state = track.getSettings?.().torch;
+  if (state === on || (state === undefined && !advancedError)) return;
+  try {
+    await track.applyConstraints({ ...current, torch: on, advanced });
+  } catch (error) {
+    throw new Error(error?.message || advancedError?.message || 'Torch control is unavailable.');
+  }
+  state = track.getSettings?.().torch;
+  if (state !== undefined && state !== on) throw new Error('The camera did not turn the flashlight on.');
 }
 
 function say(message, error = false) {
@@ -183,11 +236,14 @@ async function startCamera(force = false) {
     // Prefer the rear camera without requiring an exact match; strict constraints can
     // reject valid Android camera devices and leave the preview blank.
     const videoConstraints = {
-      facingMode: { ideal: facingMode },
-      // Ask for a detailed rear-camera stream so distant QR codes remain legible.
+      ...(facingMode === 'environment' && rearCameraDeviceId
+        ? { deviceId: { exact: rearCameraDeviceId } }
+        : { facingMode: { ideal: facingMode } }),
+      // Prefer the primary detailed rear lens and request zoom at startup.
       width: { ideal: 1920 },
       height: { ideal: 1080 },
-      frameRate: { ideal: 30, max: 30 }
+      frameRate: { ideal: 30, max: 30 },
+      zoom: { ideal: PREFERRED_CAMERA_ZOOM }
     };
     let openedStream;
     try {
@@ -205,6 +261,27 @@ async function startCamera(force = false) {
       }
     }
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
+    if (facingMode === 'environment') {
+      const initialTrack = openedStream.getVideoTracks()[0];
+      const currentId = initialTrack?.getSettings?.().deviceId || null;
+      const preferredId = await findBestRearCamera(currentId);
+      if (preferredId && preferredId !== currentId) {
+        try {
+          const preferredStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { ...videoConstraints, deviceId: { exact: preferredId } }
+          });
+          openedStream.getTracks().forEach(track => track.stop());
+          openedStream = preferredStream;
+          rearCameraDeviceId = preferredId;
+        } catch {
+          rearCameraDeviceId = currentId;
+        }
+      } else {
+        rearCameraDeviceId = preferredId || currentId;
+      }
+      if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
+    }
     stream = openedStream;
     video.muted = true;
     video.autoplay = true;
@@ -216,7 +293,7 @@ async function startCamera(force = false) {
     if (activeSession !== session) return;
     // Use a small real camera zoom when supported; the browser/device still picks
     // its preferred rear lens, and devices without zoom keep the full camera view.
-    applyPreferredCameraZoom(stream.getVideoTracks()[0]);
+    await applyPreferredCameraZoom(stream.getVideoTracks()[0]);
     starting = false;
     scanning = true;
     $('cameraButton').disabled = false;
@@ -351,20 +428,18 @@ $('switchButton').addEventListener('click', () => {
 });
 $('torchButton').addEventListener('click', async () => {
   const track = stream?.getVideoTracks()[0];
-  if (!track || facingMode !== 'environment') return;
+  if (!track || facingMode !== 'environment' || $('torchButton').disabled) return;
   const on = !$('torchButton').classList.contains('on');
+  $('torchButton').disabled = true;
   try {
-    try {
-      await track.applyConstraints({ advanced: [{ torch: on }] });
-    } catch {
-      // A few browser builds accept torch as a top-level track constraint.
-      await track.applyConstraints({ torch: on });
-    }
+    await applyTorch(track, on);
     $('torchButton').classList.toggle('on', on);
     $('torchButton').setAttribute('aria-label', on ? 'Turn flashlight off' : 'Turn flashlight on');
     say(on ? 'Flashlight on.' : 'Flashlight off.');
   } catch {
-    say('This camera or browser does not allow flashlight control.', true);
+    say('Flashlight control failed. Check camera permission and device support.', true);
+  } finally {
+    $('torchButton').disabled = false;
   }
 });
 $('fileInput').addEventListener('change', event => {
@@ -435,6 +510,18 @@ if ('BarcodeDetector' in window) {
   detector = fallbackDetector();
   detectorMode = 'jsqr';
 }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
+if ('serviceWorker' in navigator) {
+  let hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    const refreshKey = 'qr-reader-worker-v18';
+    if (sessionStorage.getItem(refreshKey)) return;
+    sessionStorage.setItem(refreshKey, '1');
+    location.reload();
+  });
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+    .then(registration => registration.update())
+    .catch(() => {});
+}
 renderHistory();
 startCamera();
