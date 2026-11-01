@@ -153,24 +153,35 @@ async function findBestRearCamera(currentDeviceId) {
 async function applyTorch(track, on) {
   let capabilities;
   try { capabilities = track.getCapabilities?.(); } catch {}
-  if (capabilities?.torch === false) {
-    const error = new Error('This camera does not expose flashlight control to the browser.');
-    error.name = 'TorchUnavailableError';
-    throw error;
+  const current = track.getConstraints?.() || {};
+  const previousAdvanced = Array.isArray(current.advanced) ? current.advanced : [];
+  const advanced = previousAdvanced.filter(item => !Object.prototype.hasOwnProperty.call(item, 'torch'));
+  let advancedError = null;
+
+  // Some Android browsers report torch=false or omit it even when the camera
+  // accepts the constraint, so attempt the runtime control before deciding.
+  try {
+    await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
+    const state = track.getSettings?.().torch;
+    if (state === on || state === undefined) return;
+  } catch (error) { advancedError = error; }
+
+  // Compatibility fallback for mobile implementations that accept torch as a
+  // top-level constraint instead of inside the advanced constraint set.
+  try {
+    await track.applyConstraints({ ...current, torch: on, advanced });
+    const state = track.getSettings?.().torch;
+    if (state === on || state === undefined) return;
+  } catch (error) {
+    const reason = error?.message || advancedError?.message;
+    const unavailable = new Error(reason || 'This camera does not expose flashlight control to the browser.');
+    unavailable.name = capabilities?.torch === false ? 'TorchUnavailableError' : (error?.name || 'TorchUnavailableError');
+    throw unavailable;
   }
 
-  // The torch is an advanced MediaTrack constraint. Android Chrome does not
-  // grant a separate flash permission; it is controlled by the active camera
-  // permission and this user-initiated switch.
-  const current = track.getConstraints?.() || {};
-  const advanced = (Array.isArray(current.advanced) ? current.advanced : [])
-    .filter(item => !Object.prototype.hasOwnProperty.call(item, 'torch'));
-  await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
-
-  let state;
-  try { state = track.getSettings?.().torch; } catch {}
-  if (state === on || (state === undefined && capabilities?.torch !== false)) return;
-  const error = new Error('The camera did not confirm the flashlight state.');
+  const error = new Error(capabilities?.torch === false
+    ? 'This camera does not expose flashlight control to the browser.'
+    : 'The camera did not confirm the flashlight state.');
   error.name = 'TorchUnavailableError';
   throw error;
 }
@@ -654,7 +665,7 @@ if ('serviceWorker' in navigator) {
   let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) { hadController = true; return; }
-    const refreshKey = 'qr-reader-worker-v21';
+    const refreshKey = 'qr-reader-worker-v25';
     if (sessionStorage.getItem(refreshKey)) return;
     sessionStorage.setItem(refreshKey, '1');
     location.reload();
