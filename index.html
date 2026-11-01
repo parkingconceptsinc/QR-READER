@@ -32,14 +32,14 @@
           <strong>Ready for your next scan</strong>
           <span>Keep the QR inside the frame</span>
         </div>
-        <div class="scan-frame" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="scan-line"></div></div>
+        <div class="scan-frame" id="scanFrame" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="scan-line"></div></div>
         <div class="live-badge" id="liveBadge" hidden><i></i> LIVE SCAN</div>
         <div class="camera-hint" id="cameraHint">Requesting camera access · QR links open instantly</div>
       </div>
       <div class="controls">
         <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Opening camera…</button>
         <button id="switchButton" class="icon-button" title="Switch camera" aria-label="Switch camera" hidden>⇄</button>
-        <button id="torchButton" class="icon-button" title="Flashlight" aria-label="Turn flashlight on" hidden>☼</button>
+        <button id="torchButton" class="icon-button" title="Flashlight" aria-label="Turn flashlight on" aria-pressed="false" hidden>☼</button>
       </div>
       <div class="divider"><span>or</span></div>
       <label class="upload" for="fileInput"><span aria-hidden="true">↑</span> Choose an image with a QR code</label>
@@ -61,8 +61,8 @@
       <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
       <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
     </section>
-    <footer>PCI QR · Camera first. Instant scans. No extra steps.</footer>
+    <footer>PCI QR · v20 · Camera first. Instant scans. No extra steps.</footer>
   </main>
-  <script src="./app.js?v=19" defer></script>
+  <script src="./app.js?v=20" defer></script>
 </body>
 </html>
