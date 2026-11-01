@@ -1,5 +1,5 @@
-const CACHE = 'lector-qr-v25';
-const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=21', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
+const CACHE = 'lector-qr-v26';
+const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=22', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
@@ -35,7 +35,7 @@ self.addEventListener('fetch', event => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match(event.request);
       if (cached) return cached;
-      const versionedUrl = new URL('./app.js?v=21', self.registration.scope).href;
+      const versionedUrl = new URL('./app.js?v=22', self.registration.scope).href;
       const versioned = await cache.match(versionedUrl);
       if (versioned) return versioned;
       try {
