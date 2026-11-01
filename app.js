@@ -9,7 +9,6 @@ let decoderFailed = false;
 let scanning = false;
 let facingMode = 'environment';
 let rearCameraDeviceId = null;
-let cameraZoom = 1;
 let session = 0;
 let starting = false;
 let resumeOnVisible = false;
@@ -79,7 +78,6 @@ async function applyPreferredCameraZoom(track) {
       : [];
     await track.applyConstraints({ ...current, advanced: [...advanced, { zoom: target }] });
     const applied = track.getSettings?.().zoom;
-    cameraZoom = Number.isFinite(applied) ? applied : target;
     return true;
   } catch { return false; }
 }
@@ -266,16 +264,22 @@ async function startCamera(force = false) {
       const currentId = initialTrack?.getSettings?.().deviceId || null;
       const preferredId = await findBestRearCamera(currentId);
       if (preferredId && preferredId !== currentId) {
+        // Release the first camera before opening another rear lens; mobile browsers
+        // often refuse two simultaneous streams from the same camera module.
+        openedStream.getTracks().forEach(track => track.stop());
         try {
-          const preferredStream = await navigator.mediaDevices.getUserMedia({
+          openedStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
             video: { ...videoConstraints, deviceId: { exact: preferredId } }
           });
-          openedStream.getTracks().forEach(track => track.stop());
-          openedStream = preferredStream;
           rearCameraDeviceId = preferredId;
         } catch {
-          rearCameraDeviceId = currentId;
+          // Reopen the browser-selected rear camera if the preferred labeled lens fails.
+          openedStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { ...videoConstraints, facingMode: { ideal: 'environment' } }
+          });
+          rearCameraDeviceId = openedStream.getVideoTracks()[0]?.getSettings?.().deviceId || currentId;
         }
       } else {
         rearCameraDeviceId = preferredId || currentId;
