@@ -1,5 +1,5 @@
-const CACHE = 'lector-qr-v28';
-const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=24', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
+const CACHE = 'lector-qr-v29';
+const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=25', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
@@ -14,13 +14,18 @@ self.addEventListener('fetch', event => {
   if (event.request.mode === 'navigate') {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
-      const cached = await cache.match(event.request);
-      if (cached) return cached;
       try {
-        const response = await fetch(event.request);
-        if (response.ok) event.waitUntil(cache.put(event.request, response.clone()));
-        return response;
+        // Refresh the installed shell whenever online so a stale home-screen
+        // document cannot outlive the worker update.
+        const response = await fetch(event.request, { cache: 'no-store' });
+        if (response.ok) {
+          event.waitUntil(cache.put(event.request, response.clone()));
+          return response;
+        }
+        throw new Error('Navigation request failed.');
       } catch {
+        const cached = await cache.match(event.request);
+        if (cached) return cached;
         const indexUrl = new URL('./index.html', self.registration.scope).href;
         const rootUrl = new URL('./', self.registration.scope).href;
         return (await cache.match(indexUrl)) || (await cache.match(rootUrl)) || Response.error();
@@ -35,7 +40,7 @@ self.addEventListener('fetch', event => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match(event.request);
       if (cached) return cached;
-      const versionedUrl = new URL('./app.js?v=24', self.registration.scope).href;
+      const versionedUrl = new URL('./app.js?v=25', self.registration.scope).href;
       const versioned = await cache.match(versionedUrl);
       if (versioned) return versioned;
       try {
