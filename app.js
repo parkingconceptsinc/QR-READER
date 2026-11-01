@@ -8,7 +8,6 @@ let detectorMode = 'none';
 let decoderFailed = false;
 let scanning = false;
 let facingMode = 'environment';
-let rearCameraDeviceId = null;
 let cameraRecoveryAttempts = 0;
 let cameraRecoveryTimer = null;
 let cameraMuteTimer = null;
@@ -33,7 +32,6 @@ const FALLBACK_MAX_DIMENSION = 768;
 const SCAN_FRAME_DIMENSION = 768;
 const scanCanvas = document.createElement('canvas');
 const scanContext = scanCanvas.getContext('2d', { willReadFrequently: true });
-const PREFERRED_CAMERA_ZOOM = 2;
 
 function fallbackDetector() {
   const canvas = scanCanvas;
@@ -73,34 +71,6 @@ function fallbackDetector() {
   };
 }
 
-async function applyPreferredCameraSettings(track) {
-  if (facingMode !== 'environment') return false;
-  try {
-    const capabilities = track.getCapabilities?.() || {};
-    const current = track.getConstraints?.() || {};
-    const preferred = [];
-    const range = capabilities.zoom;
-    if (range && Number.isFinite(range.max)) {
-      const minimum = Number.isFinite(range.min) ? range.min : 1;
-      const target = Math.min(range.max, Math.max(minimum, PREFERRED_CAMERA_ZOOM));
-      if (target > minimum + 0.05) preferred.push({ zoom: target });
-    }
-    for (const [name, mode] of [
-      ['focusMode', 'continuous'],
-      ['exposureMode', 'continuous'],
-      ['whiteBalanceMode', 'continuous']
-    ]) {
-      if (Array.isArray(capabilities[name]) && capabilities[name].includes(mode)) preferred.push({ [name]: mode });
-    }
-    const supportedNames = new Set(['zoom', 'focusMode', 'exposureMode', 'whiteBalanceMode']);
-    const advanced = (Array.isArray(current.advanced) ? current.advanced : [])
-      .filter(item => !Object.keys(item).some(name => supportedNames.has(name)));
-    if (preferred.length) await track.applyConstraints({ ...current, advanced: [...advanced, ...preferred] });
-    const actualZoom = track.getSettings?.().zoom;
-    return Number.isFinite(actualZoom) ? actualZoom > 1.05 : preferred.some(item => item.zoom);
-  } catch { return false; }
-}
-
 function captureScanRegion() {
   const width = video.videoWidth;
   const height = video.videoHeight;
@@ -109,69 +79,19 @@ function captureScanRegion() {
   if (!scanContext || !width || !height || !stageRect.width || !stageRect.height || !frameRect.width) return video;
 
   const fitScale = Math.max(stageRect.width / width, stageRect.height / height);
-  const softwareZoom = Number(video.dataset.softwareZoom || 1);
-  const centerX = width / 2 + (frameRect.left + frameRect.width / 2 - stageRect.left - stageRect.width / 2) / (fitScale * softwareZoom);
-  const centerY = height / 2 + (frameRect.top + frameRect.height / 2 - stageRect.top - stageRect.height / 2) / (fitScale * softwareZoom);
-  const sourceWidth = frameRect.width / (fitScale * softwareZoom);
-  const sourceHeight = frameRect.height / (fitScale * softwareZoom);
+  const centerX = width / 2 + (frameRect.left + frameRect.width / 2 - stageRect.left - stageRect.width / 2) / (fitScale);
+  const centerY = height / 2 + (frameRect.top + frameRect.height / 2 - stageRect.top - stageRect.height / 2) / (fitScale);
+  const sourceWidth = frameRect.width / (fitScale);
+  const sourceHeight = frameRect.height / (fitScale);
   const sx = Math.max(0, Math.min(width - 1, centerX - sourceWidth / 2));
   const sy = Math.max(0, Math.min(height - 1, centerY - sourceHeight / 2));
   const sw = Math.max(1, Math.min(width - sx, sourceWidth));
   const sh = Math.max(1, Math.min(height - sy, sourceHeight));
 
-  scanCanvas.width = SCAN_FRAME_DIMENSION;
-  scanCanvas.height = SCAN_FRAME_DIMENSION;
+  if (scanCanvas.width !== SCAN_FRAME_DIMENSION) scanCanvas.width = SCAN_FRAME_DIMENSION;
+  if (scanCanvas.height !== SCAN_FRAME_DIMENSION) scanCanvas.height = SCAN_FRAME_DIMENSION;
   scanContext.drawImage(video, sx, sy, sw, sh, 0, 0, SCAN_FRAME_DIMENSION, SCAN_FRAME_DIMENSION);
   return scanCanvas;
-}
-
-function scoreRearCamera(device) {
-  const label = (device.label || '').toLowerCase();
-  if (!label || /front|user|selfie|facetime|frontal|delantera/.test(label)) return -Infinity;
-  if (!/back|rear|environment|trasera|posterior/.test(label)) return -Infinity;
-  let score = 100;
-  if (/ultra.?wide|ultrawide|0[.,]5x|macro|depth|bokeh|telephoto|tele\b|[23]x/.test(label)) score -= 200;
-  // Prefer the main rear module: it is usually the clearest lens and most likely
-  // to expose the phone's LED torch to the browser.
-  if (/main|primary|standard|normal|wide\b/.test(label)) score += 50;
-  if (/camera\s*0|(?:^|\W)0(?:\W|$)/.test(label)) score += 1;
-  return score;
-}
-
-async function applyTorch(track, on) {
-  let capabilities;
-  try { capabilities = track.getCapabilities?.(); } catch {}
-  const current = track.getConstraints?.() || {};
-  const previousAdvanced = Array.isArray(current.advanced) ? current.advanced : [];
-  const advanced = previousAdvanced.filter(item => !Object.prototype.hasOwnProperty.call(item, 'torch'));
-  let advancedError = null;
-
-  // Some Android browsers report torch=false or omit it even when the camera
-  // accepts the constraint, so attempt the runtime control before deciding.
-  try {
-    await track.applyConstraints({ ...current, advanced: [...advanced, { torch: on }] });
-    const state = track.getSettings?.().torch;
-    if (state === on || state === undefined) return;
-  } catch (error) { advancedError = error; }
-
-  // Compatibility fallback for mobile implementations that accept torch as a
-  // top-level constraint instead of inside the advanced constraint set.
-  try {
-    await track.applyConstraints({ ...current, torch: on, advanced });
-    const state = track.getSettings?.().torch;
-    if (state === on || state === undefined) return;
-  } catch (error) {
-    const reason = error?.message || advancedError?.message;
-    const unavailable = new Error(reason || 'This camera does not expose flashlight control to the browser.');
-    unavailable.name = capabilities?.torch === false ? 'TorchUnavailableError' : (error?.name || 'TorchUnavailableError');
-    throw unavailable;
-  }
-
-  const error = new Error(capabilities?.torch === false
-    ? 'This camera does not expose flashlight control to the browser.'
-    : 'The camera did not confirm the flashlight state.');
-  error.name = 'TorchUnavailableError';
-  throw error;
 }
 
 function showCameraFailure(message) {
@@ -300,20 +220,14 @@ function stopCamera() {
   clearTimeout(cameraStableTimer);
   cameraStableTimer = null;
   $('cameraButton').disabled = false;
-  $('torchButton').classList.remove('on');
-  $('torchButton').setAttribute('aria-label', 'Turn flashlight on');
-  $('torchButton').setAttribute('aria-pressed', 'false');
   if (stream) stream.getTracks().forEach(track => {
     try { track.stop(); } catch {}
   });
   stream = null;
   video.srcObject = null;
-  video.style.transform = '';
-  delete video.dataset.softwareZoom;
   stage.classList.remove('active');
   $('liveBadge').hidden = true;
   $('switchButton').hidden = true;
-  $('torchButton').hidden = true;
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start scanning';
   $('cameraHint').textContent = 'Camera ready · Scan again instantly';
 }
@@ -322,7 +236,7 @@ async function startCamera(force = false) {
   if (force) {
     manuallyStopped = false;
     if (decoderFailed && detectorMode === 'jsqr') {
-      detectorFailed = false;
+      decoderFailed = false;
       detector = fallbackDetector();
     }
   }
@@ -341,14 +255,10 @@ async function startCamera(force = false) {
     // Prefer the rear camera without requiring an exact match; strict constraints can
     // reject valid Android camera devices and leave the preview blank.
     const videoConstraints = {
-      ...(facingMode === 'environment' && rearCameraDeviceId
-        ? { deviceId: { exact: rearCameraDeviceId } }
-        : { facingMode: { ideal: facingMode } }),
-      // Prefer the primary detailed rear lens and request zoom at startup.
+      facingMode: { ideal: facingMode },
       width: { ideal: 1920 },
       height: { ideal: 1080 },
-      frameRate: { ideal: 30, max: 30 },
-      zoom: { ideal: PREFERRED_CAMERA_ZOOM }
+      frameRate: { ideal: 30 }
     };
     let openedStream;
     try {
@@ -357,8 +267,7 @@ async function startCamera(force = false) {
       if (!['OverconstrainedError', 'NotFoundError'].includes(cameraError.name)) throw cameraError;
       try {
         openedStream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: facingMode } }
+          audio: false, video: { facingMode: { ideal: facingMode } }
         });
       } catch (fallbackError) {
         if (!['OverconstrainedError', 'NotFoundError'].includes(fallbackError.name)) throw fallbackError;
@@ -366,11 +275,6 @@ async function startCamera(force = false) {
       }
     }
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
-    if (facingMode === 'environment') {
-      // Keep the rear camera selected by the browser. Replacing it based on
-      // device labels can switch to an auxiliary lens without LED control.
-      rearCameraDeviceId = openedStream.getVideoTracks()[0]?.getSettings?.().deviceId || rearCameraDeviceId;
-    }
     stream = openedStream;
     video.muted = true;
     video.autoplay = true;
@@ -380,11 +284,6 @@ async function startCamera(force = false) {
     video.srcObject = stream;
     await video.play();
     if (activeSession !== session) return;
-    // Keep continuous autofocus/exposure and hardware zoom when supported.
-    const hardwareZoomApplied = await applyPreferredCameraSettings(stream.getVideoTracks()[0]);
-    const softwareZoom = hardwareZoomApplied ? 1 : 1.3;
-    video.dataset.softwareZoom = String(softwareZoom);
-    video.style.transform = 'scale(' + softwareZoom + ')';
     starting = false;
     scanning = true;
     cameraRecoveryTimer = null;
@@ -394,16 +293,14 @@ async function startCamera(force = false) {
       cameraStableTimer = null;
     }, 8000);
     detectorErrorCount = 0;
+    lastScanAt = 0;
     $('cameraButton').disabled = false;
     stage.classList.add('active');
     $('liveBadge').hidden = false;
     $('switchButton').hidden = false;
-    // Keep the flashlight control available on rear cameras. Some mobile browsers
-    // support the torch constraint but omit it from getCapabilities().
-    $('torchButton').hidden = facingMode !== 'environment';
     monitorCameraTrack(stream.getVideoTracks()[0], activeSession);
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
-    $('cameraHint').textContent = "Center the code · Tap ☼ for flashlight (uses Camera permission)";
+    $('cameraHint').textContent = 'Center the code · Scanning automatically';
     say('Scanning automatically. Point at a QR code.');
     scheduleScan(activeSession);
   } catch (error) {
@@ -538,27 +435,6 @@ $('switchButton').addEventListener('click', () => {
   stopCamera();
   startCamera();
 });
-$('torchButton').addEventListener('click', async () => {
-  const track = stream?.getVideoTracks()[0];
-  if (!track || facingMode !== 'environment' || $('torchButton').disabled) return;
-  const on = !$('torchButton').classList.contains('on');
-  $('torchButton').disabled = true;
-  try {
-    await applyTorch(track, on);
-    $('torchButton').classList.toggle('on', on);
-    $('torchButton').setAttribute('aria-label', on ? 'Turn flashlight off' : 'Turn flashlight on');
-    $('torchButton').setAttribute('aria-pressed', String(on));
-    say(on ? 'Flashlight on.' : 'Flashlight off.');
-  } catch (error) {
-    const message = error?.name === 'TorchUnavailableError' || error?.name === 'OverconstrainedError' || error?.name === 'NotSupportedError'
-      ? 'No separate flash permission exists in Android. This camera did not expose its flashlight to the browser. Keep Camera allowed in site settings and try the main rear camera in Chrome.'
-      : 'Flashlight could not turn on. Keep Camera allowed in site settings and try again.';
-    say(message, true);
-    $('cameraHint').textContent = message;
-  } finally {
-    $('torchButton').disabled = false;
-  }
-});
 $('fileInput').addEventListener('change', event => {
   readFile(event.target.files[0]);
   event.target.value = '';
@@ -631,7 +507,7 @@ if ('serviceWorker' in navigator) {
   let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) { hadController = true; return; }
-    const refreshKey = 'qr-reader-worker-v26';
+    const refreshKey = 'qr-reader-worker-v27';
     if (sessionStorage.getItem(refreshKey)) return;
     sessionStorage.setItem(refreshKey, '1');
     location.reload();
