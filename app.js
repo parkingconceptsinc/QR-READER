@@ -22,7 +22,8 @@ let restartTimer = null;
 const historyKey = 'lector-qr-history-v1';
 const decoderUrl = './vendor/jsQR.js';
 const LIVE_SCAN_INTERVAL_MS = 55;
-const FALLBACK_MAX_DIMENSION = 640;
+const FALLBACK_MAX_DIMENSION = 960;
+const PREFERRED_CAMERA_ZOOM = 1.6;
 
 function fallbackDetector() {
   const canvas = document.createElement('canvas');
@@ -60,6 +61,19 @@ function fallbackDetector() {
       return code ? [{ rawValue: code.data }] : [];
     }
   };
+}
+
+function applyPreferredCameraZoom(track) {
+  if (facingMode !== 'environment' || typeof track?.getCapabilities !== 'function') return;
+  try {
+    const range = track.getCapabilities().zoom;
+    if (!range || !Number.isFinite(range.max)) return;
+    const minimum = Number.isFinite(range.min) ? range.min : 1;
+    const target = Math.min(range.max, Math.max(minimum, PREFERRED_CAMERA_ZOOM));
+    if (target <= minimum + 0.05) return;
+    // Keep zoom optional: unsupported controls must never prevent camera startup.
+    track.applyConstraints({ advanced: [{ zoom: target }] }).catch(() => {});
+  } catch {}
 }
 
 function say(message, error = false) {
@@ -170,8 +184,9 @@ async function startCamera(force = false) {
     // reject valid Android camera devices and leave the preview blank.
     const videoConstraints = {
       facingMode: { ideal: facingMode },
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
+      // Ask for a detailed rear-camera stream so distant QR codes remain legible.
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
       frameRate: { ideal: 30, max: 30 }
     };
     let openedStream;
@@ -199,6 +214,9 @@ async function startCamera(force = false) {
     video.srcObject = stream;
     await video.play();
     if (activeSession !== session) return;
+    // Use a small real camera zoom when supported; the browser/device still picks
+    // its preferred rear lens, and devices without zoom keep the full camera view.
+    applyPreferredCameraZoom(stream.getVideoTracks()[0]);
     starting = false;
     scanning = true;
     $('cameraButton').disabled = false;
