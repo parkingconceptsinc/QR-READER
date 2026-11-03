@@ -24,6 +24,49 @@ let installPrompt = null;
 let lastDecodedValue = '';
 let lastDecodedAt = 0;
 let restartTimer = null;
+let feedbackTimer = null;
+let focusAnimation = null;
+// Visual effects never schedule decoding or delay camera acquisition/navigation.
+function setVisualState(state) {
+  stage.setAttribute('data-state', state);
+  stage.setAttribute('aria-busy', String(state === 'opening' || state === 'reading'));
+  $('liveBadge').hidden = false;
+  const labels = {
+    opening: ['CONNECTING', 'Opening your camera', 'Keep the QR inside the frame'],
+    scanning: ['LIVE SCAN', 'Ready for your next scan', 'Keep the QR inside the frame'],
+    idle: ['PAUSED', 'Camera paused', 'Tap Start scanning to continue'],
+    reading: ['IMAGE SCAN', 'Reading your image', 'Looking for a QR code'],
+    detected: ['CODE DETECTED', 'Opening your link', 'Ready for your next scan'],
+    error: ['CAMERA OFFLINE', 'Camera needs attention', 'Check the message below, then retry']
+  };
+  const [label, title, message] = labels[state];
+  $('scanState').textContent = label;
+  $('placeholderTitle').textContent = title;
+  $('placeholderMessage').textContent = message;
+}
+
+function detectionFeedback() {
+  clearTimeout(feedbackTimer);
+  stage.setAttribute('data-feedback', 'detected');
+  feedbackTimer = setTimeout(() => {
+    stage.setAttribute('data-feedback', '');
+    feedbackTimer = null;
+  }, 650);
+}
+
+function focusFeedback(x = 0.5, y = 0.5) {
+  const reticle = $('focusReticle');
+  reticle.style.left = `${Math.max(0.08, Math.min(0.92, x)) * 100}%`;
+  reticle.style.top = `${Math.max(0.08, Math.min(0.92, y)) * 100}%`;
+  focusAnimation?.cancel();
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  focusAnimation = reticle.animate?.([
+    { opacity: 0, transform: 'translate(-50%, -50%) scale(1.25)' },
+    { opacity: 1, transform: 'translate(-50%, -50%) scale(1)', offset: 0.2 },
+    { opacity: 1, transform: 'translate(-50%, -50%) scale(1)', offset: 0.65 },
+    { opacity: 0, transform: 'translate(-50%, -50%) scale(0.95)' }
+  ], { duration: 560, easing: 'ease-out' });
+}
 const historyKey = 'lector-qr-history-v1';
 const scanner = QRScanner.create({
   video, stage, frame: $('scanFrame'),
@@ -38,6 +81,7 @@ const scanner = QRScanner.create({
   },
   onError(error) {
     stopCamera();
+    setVisualState('error');
     say(error.message || 'QR scanning paused. Tap Retry scanner.', true);
     $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry scanner';
   }
@@ -94,6 +138,7 @@ function updateCameraControls(track, snapshot) {
 
 function showCameraFailure(message) {
   stopCamera();
+  setVisualState('error');
   say(message, true);
   $('cameraHint').textContent = 'Camera unavailable · Check permissions or close other apps, then retry';
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
@@ -107,6 +152,7 @@ function handleUnexpectedCameraLoss(activeSession, message) {
   }
   cameraRecoveryAttempts++;
   stopCamera();
+  setVisualState('opening');
   say(message + ' Reconnecting…');
   $('cameraHint').textContent = 'Camera interrupted · Reconnecting automatically';
   const delay = 300 * cameraRecoveryAttempts;
@@ -175,6 +221,7 @@ function renderHistory() {
 function showResult(value, save = true) {
   const url = safeUrl(value);
   if (save) {
+    detectionFeedback();
     const items = getHistory().filter(item => item.value !== value);
     items.unshift({ value, time: Date.now() });
     try { localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 10))); } catch {}
@@ -221,6 +268,11 @@ function stopCamera() {
   cameraMuteTimer = null;
   clearTimeout(cameraStableTimer);
   cameraStableTimer = null;
+  clearTimeout(feedbackTimer);
+  feedbackTimer = null;
+  stage.setAttribute('data-feedback', '');
+  focusAnimation?.cancel();
+  focusAnimation = null;
   $('cameraButton').disabled = false;
   if (stream) stream.getTracks().forEach(track => {
     try { track.stop(); } catch {}
@@ -228,7 +280,7 @@ function stopCamera() {
   stream = null;
   video.srcObject = null;
   stage.classList.remove('active');
-  $('liveBadge').hidden = true;
+  setVisualState(navigating ? 'detected' : 'idle');
   $('focusButton').hidden = true;
   $('zoomControls').hidden = true;
   $('cameraPicker').hidden = true;
@@ -247,6 +299,7 @@ async function startCamera(force = false) {
   stopCamera();
   const activeSession = session;
   starting = true;
+  setVisualState('opening');
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Opening camera…';
   $('cameraButton').disabled = true;
   say('Requesting camera access…');
@@ -275,7 +328,7 @@ async function startCamera(force = false) {
     }, 8000);
     $('cameraButton').disabled = false;
     stage.classList.add('active');
-    $('liveBadge').hidden = false;
+    setVisualState('scanning');
     const track = stream.getVideoTracks()[0];
     monitorCameraTrack(track, activeSession);
     renderCameraOptions(devices, track);
@@ -293,6 +346,7 @@ async function startCamera(force = false) {
   } catch (error) {
     if (activeSession !== session) return;
     stopCamera();
+    setVisualState('error');
     registerUpdates();
     const message = error.name === 'NotAllowedError' || error.name === 'SecurityError'
       ? 'Camera permission is blocked. In Chrome, open the site controls beside the address bar → Site settings → Camera → Allow. In Windows, enable Settings → Privacy & security → Camera. Then reload and tap Retry camera.'
@@ -321,6 +375,7 @@ async function readFile(file) {
   if (!file) return;
   stopCamera();
   const fileSession = session;
+  setVisualState('reading');
   say('Reading the image…');
   try {
     const bitmap = await createImageBitmap(file);
@@ -339,6 +394,8 @@ async function readFile(file) {
     if (fileSession !== session) return;
     say('Could not read the image. Choose a valid image file.', true);
     scheduleCameraRestart(350);
+  } finally {
+    if (fileSession === session && !navigating) setVisualState('idle');
   }
 }
 
@@ -349,12 +406,17 @@ $('cameraButton').addEventListener('click', () => {
     say('Camera stopped.');
   } else startCamera(true);
 });
-$('focusButton').addEventListener('click', () => cameraControls?.refocus());
+$('focusButton').addEventListener('click', () => {
+  if (!cameraControls) return;
+  focusFeedback();
+  cameraControls.refocus();
+});
 stage.addEventListener('pointerup', event => {
   if (!cameraControls) return;
   const rect = stage.getBoundingClientRect();
   const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
   if (!scale) return;
+  focusFeedback((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height);
   cameraControls.refocus({
     x: 0.5 + (event.clientX - rect.left - rect.width / 2) / (scale * video.videoWidth),
     y: 0.5 + (event.clientY - rect.top - rect.height / 2) / (scale * video.videoHeight)
@@ -399,6 +461,7 @@ $('install').addEventListener('click', async () => {
   $('install').hidden = true;
 });
 document.addEventListener('visibilitychange', () => {
+  stage.classList.toggle('effects-paused', document.hidden);
   if (document.hidden) {
     // A QR link may hand off to another app; preserve the intent to resume on return.
     resumeOnVisible = !manuallyStopped && (scanning || starting || navigating);
@@ -429,3 +492,4 @@ window.addEventListener('pageshow', () => {
 
 // Ask for the camera before rendering optional history or checking for updates.
 startCamera();
+

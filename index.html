@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/pci-qr-192-v6.png" type="image/png">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/pci-qr-180-v6.png">
-  <link rel="stylesheet" href="./styles.css?v=34">
+  <link rel="stylesheet" href="./styles.css?v=35">
   <title>PCI · QR Scanner</title>
 </head>
 <body>
@@ -19,15 +19,24 @@
     </header>
 
     <section class="scanner" aria-label="QR code scanner">
-      <div class="camera-stage" id="stage">
+      <div class="camera-stage" id="stage" data-state="opening" aria-busy="true">
         <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
         <div class="camera-placeholder" id="placeholder">
-          <div class="placeholder-icon" aria-hidden="true">⌗</div>
-          <strong>Ready for your next scan</strong>
-          <span>Keep the QR inside the frame</span>
+          <div class="placeholder-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><path d="M17 7H7v10M31 7h10v10M7 31v10h10M41 31v10H31"/><path d="M17 17h5v5h-5zM27 17h4v5h-4zM17 27h5v4h-5zM27 27h4v4h-4z"/></svg></div>
+          <strong id="placeholderTitle">Opening your camera</strong>
+          <span id="placeholderMessage">Keep the QR inside the frame</span>
         </div>
-        <div class="scan-frame" id="scanFrame" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-        <div class="live-badge" id="liveBadge" hidden><i></i> LIVE SCAN</div>
+        <div class="scan-frame" id="scanFrame" aria-hidden="true">
+          <span class="corner"></span><span class="corner"></span><span class="corner"></span><span class="corner"></span>
+          <div class="frame-heading"><span>QR ACQUISITION</span><span class="frame-mode">AUTO</span></div>
+          <div class="frame-grid"></div>
+          <div class="beam-window"><div class="scan-beam"></div></div>
+          <div class="frame-crosshair"></div>
+          <div class="frame-caption">ALIGN · SCAN · GO</div>
+        </div>
+        <div class="focus-reticle" id="focusReticle" aria-hidden="true"></div>
+        <div class="live-badge" id="liveBadge"><i aria-hidden="true"></i><span id="scanState">CONNECTING</span></div>
+        <div class="stage-mark" aria-hidden="true">PCI <span>VISION</span></div>
         <div class="camera-hint" id="cameraHint">Requesting camera access · QR links open instantly</div>
       </div>
       <div class="controls">
@@ -64,11 +73,12 @@
       <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
       <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
     </section>
-    <footer>PCI QR · v34 · Speed first.</footer>
+    <footer>PCI QR · v35 · Speed first.</footer>
   </main>
-  <script src="./camera.js?v=34" defer></script>
-  <script src="./scanner.js?v=34" defer></script>
-  <script src="./app.js?v=34" defer></script>
+  <script src="./camera.js?v=35" defer></script>
+  <script src="./scanner.js?v=35" defer></script>
+  <script src="./app.js?v=35" defer></script>
 </body>
 </html>
+
 
