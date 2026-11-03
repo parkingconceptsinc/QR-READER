@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/pci-qr-192-v6.png" type="image/png">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/pci-qr-180-v6.png">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=32">
   <title>PCI · QR Scanner</title>
 </head>
 <body>
@@ -40,6 +40,9 @@
         <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Opening camera…</button>
         <button id="switchButton" class="icon-button" title="Switch camera" aria-label="Switch camera" hidden>⇄</button>
       </div>
+      <label id="cameraPicker" class="camera-picker" hidden>Camera
+        <select id="cameraSelect" aria-label="Choose camera lens"></select>
+      </label>
       <div class="divider"><span>or</span></div>
       <label class="upload" for="fileInput"><span aria-hidden="true">↑</span> Choose an image with a QR code</label>
       <input id="fileInput" type="file" accept="image/*" hidden>
@@ -60,8 +63,9 @@
       <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
       <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
     </section>
-    <footer>PCI QR · v27 · Camera first. Instant scans. No extra steps.</footer>
+    <footer>PCI QR · v32 · Camera first. Instant scans. No extra steps.</footer>
   </main>
-  <script src="./app.js?v=27" defer></script>
+  <script src="./camera.js?v=32" defer></script>
+  <script src="./app.js?v=32" defer></script>
 </body>
 </html>
