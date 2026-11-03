@@ -6,7 +6,7 @@ const flush = () => new Promise(setImmediate);
 
 function element(id) {
   const events = {};
-  return { hidden: true, disabled: false, value: '', textContent: '', options: [],
+  return { hidden: true, disabled: false, value: '', textContent: '', options: [], style: {},
     classList: { add() {}, remove() {}, toggle() {} },
     setAttribute(name, value) { this[name] = value; },
     append() {}, scrollIntoView() {}, replaceChildren(...items) { this.options = items; },
@@ -51,6 +51,7 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
     addEventListener() {}, head: { append(script) { context.jsQR = mainDecoder; queueMicrotask(script.onload); } }
   };
   const context = vm.createContext({ document, DOMException, URL, console,
+    createImageBitmap: async () => ({ width: 200, height: 200, close() {} }),
     navigator: { mediaDevices: {
       getSupportedConstraints: () => ({ pointsOfInterest: true }),
       enumerateDevices: async () => devices,
@@ -182,5 +183,48 @@ test('permission failure leaves a working retry button and no live camera', asyn
   assert.match(h.get('status').textContent, /permission is blocked/);
   assert.equal(h.get('cameraButton').disabled, false);
   assert.equal(h.tracks.length, 0);
+  assert.equal(h.get('stage')['data-state'], 'error');
+  assert.equal(h.get('stage')['aria-busy'], 'false');
 });
+
+test('visual state follows manual stop and resume without holding up acquisition', async () => {
+  const h = await app();
+  assert.equal(h.get('stage')['data-state'], 'scanning');
+  assert.equal(h.get('stage')['aria-busy'], 'false');
+  h.get('cameraButton').fire('click');
+  assert.equal(h.get('stage')['data-state'], 'idle');
+  assert.equal(h.tracks[0].readyState, 'ended');
+  h.get('cameraButton').fire('click');
+  assert.equal(h.get('stage')['data-state'], 'opening');
+  assert.equal(h.get('stage')['aria-busy'], 'true');
+  await flush(); await flush();
+  assert.equal(h.get('stage')['data-state'], 'scanning');
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+});
+
+test('importing text while manually paused finishes the busy state and keeps the camera stopped', async () => {
+  const h = await app();
+  h.get('cameraButton').fire('click');
+  h.codes('IMPORTED TEXT');
+  h.get('fileInput').files = [{}];
+  h.get('fileInput').fire('change');
+  assert.equal(h.get('stage')['data-state'], 'reading');
+  await flush(); await flush();
+  assert.equal(h.get('resultValue').textContent, 'IMPORTED TEXT');
+  assert.equal(h.get('stage')['data-state'], 'idle');
+  assert.equal(h.get('stage')['aria-busy'], 'false');
+  assert.equal(h.tracks.length, 1);
+  assert.equal(h.tracks[0].readyState, 'ended');
+});
+
+test('reduced motion skips the reticle animation while tap focus still reaches the camera', async () => {
+  const h = await app();
+  h.context.matchMedia = () => ({ matches: true });
+  h.get('focusReticle').animate = () => { throw new Error('Reduced motion must not animate'); };
+  h.get('stage').fire('pointerup', { clientX: 180, clientY: 280 });
+  await flush();
+  assert.equal(h.tracks[0].getSettings().pointsOfInterest[0].x, 0.5);
+  assert.equal(h.tracks[0].readyState, 'live');
+});
+
 

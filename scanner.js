@@ -19,7 +19,7 @@ globalThis.QRScanner = (() => {
     }
     try {
       if (typeof Worker === 'function') {
-        worker = new Worker('./scan-worker.js?v=34');
+        worker = new Worker('./scan-worker.js?v=35');
         worker.onmessage = ({ data }) => {
           const request = pending.get(data.id);
           if (!request) return;
@@ -254,3 +254,4 @@ globalThis.QRScanner = (() => {
   }
   return Object.freeze({ create });
 })();
+
