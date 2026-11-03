@@ -42,5 +42,9 @@ footer{letter-spacing:.025em}
 .camera-picker select{flex:1;min-width:0;max-width:100%;min-height:42px;padding:8px;border:1px solid #30415b;border-radius:10px;background:#142238;color:var(--ink);font:inherit}
 .camera-picker select:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .camera-hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zoom-controls{display:flex;align-items:center;gap:10px;margin-top:10px;padding:0 6px;color:var(--muted);font-size:12px}
+.zoom-controls label{white-space:nowrap;min-width:76px}.zoom-controls output{color:var(--ink);font-variant-numeric:tabular-nums}
+.zoom-controls input{flex:1;min-width:50px;min-height:40px;accent-color:var(--mint);touch-action:pan-y}
+#autoZoomButton[aria-pressed="true"]{color:var(--mint);background:#123c39;border-radius:9px}
 @media(min-width:760px){.scanner{padding:12px}.camera-stage{height:min(62svh,590px)}}
 @media(max-width:420px){.app{width:calc(100% - 14px)}.camera-stage{height:62svh;min-height:310px}.scanner{padding:7px}.result,.history{border-radius:16px}}
