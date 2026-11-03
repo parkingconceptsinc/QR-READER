@@ -48,6 +48,8 @@ globalThis.QRCamera = (() => {
     stream?.getTracks().forEach(track => track.stop());
   }
 
+  const deviceCache = new WeakMap();
+
   async function open({ mediaDevices, facingMode, deviceId = '', isCurrent = () => true }) {
     let opened = null;
     const attemptedRearIds = new Set();
@@ -95,7 +97,13 @@ globalThis.QRCamera = (() => {
       }
     }
     try {
-      let devices = await list(mediaDevices);
+      let cached = deviceCache.get(mediaDevices);
+      if (!cached) {
+        cached = { devices: await list(mediaDevices) };
+        deviceCache.set(mediaDevices, cached);
+        mediaDevices.addEventListener?.('devicechange', () => deviceCache.delete(mediaDevices), { once: true });
+      }
+      let devices = cached.devices;
       check();
       if (facingMode === 'environment' && devices.length && devices.every(device => isFront(device))) {
         throw new DOMException('No rear camera was found.', 'NotFoundError');
@@ -104,7 +112,13 @@ globalThis.QRCamera = (() => {
       if (facingMode === 'environment' && selected && isFront(selected)) deviceId = '';
       const preferred = deviceId || choose(devices, facingMode)?.deviceId;
       await acquire(preferred);
-      devices = await list(mediaDevices);
+      // A verified explicit lens needs no second enumeration before first scan.
+      // Permission-unlocked/changed identities still get a full ranking pass.
+      const actualId = opened.getVideoTracks()[0]?.getSettings?.().deviceId;
+      if (!preferred || actualId !== preferred || !devices.some(device => device.deviceId === actualId && device.label)) {
+        devices = await list(mediaDevices);
+        deviceCache.set(mediaDevices, { devices });
+      }
       check();
       const track = opened.getVideoTracks()[0];
       const settings = track?.getSettings?.() || {};
@@ -122,6 +136,7 @@ globalThis.QRCamera = (() => {
       check();
       return { stream: opened, devices };
     } catch (error) {
+      deviceCache.delete(mediaDevices);
       close(opened);
       throw error;
     }
@@ -161,7 +176,7 @@ globalThis.QRCamera = (() => {
     let queue = Promise.resolve();
     let automatic = true;
     let zoomEpoch = null;
-    let lastZoom = null;
+    let lastZoom = read(track, 'getSettings').zoom;
     let zoomBusy = false;
     let manualZoomJob = null;
     let desiredManualZoom = null;
@@ -184,7 +199,7 @@ globalThis.QRCamera = (() => {
         const nextImage = advanced ? { ...image, ...patch } : image;
         try {
           await track.applyConstraints({ ...nextBase,
-            ...(Object.keys(nextImage).length ? { advanced: [{ ...nextImage }] } : {}) });
+            ...(Object.keys(nextImage).length ? { advanced: Object.entries(nextImage).map(([key, value]) => ({ [key]: value })) } : {}) });
           base = nextBase;
           image = nextImage;
           changed();
@@ -215,21 +230,29 @@ globalThis.QRCamera = (() => {
     }
 
     const ready = (async () => {
-      if (focusMode) await apply({ focusMode });
+      const controls = {};
+      if (focusMode) controls.focusMode = focusMode;
       for (const property of ['exposureMode', 'whiteBalanceMode']) {
-        if (capabilities[property]?.includes('continuous')) await apply({ [property]: 'continuous' });
+        if (capabilities[property]?.includes('continuous')) controls[property] = 'continuous';
       }
-      if (supported.pointsOfInterest) await apply({ pointsOfInterest: [{ x: 0.5, y: 0.5 }] });
+      if (supported.pointsOfInterest) controls.pointsOfInterest = [{ x: 0.5, y: 0.5 }];
+      // One driver call, with independent optional sets so an unsupported
+      // exposure mode cannot cause autofocus to be skipped with it.
+      if (Object.keys(controls).length && !await apply(controls)) {
+        for (const [key, value] of Object.entries(controls)) await apply({ [key]: value });
+      }
       const settings = read(track, 'getSettings');
+      const quality = {};
       if (Number.isFinite(capabilities.width?.max) && Number.isFinite(capabilities.height?.max)) {
         const portrait = settings.height > settings.width;
         const width = Math.min(capabilities.width.max, portrait ? 2160 : 3840);
         const height = Math.min(capabilities.height.max, portrait ? 3840 : 2160);
         if (width > 0 && height > 0 && (width > (settings.width || 0) || height > (settings.height || 0))) {
-          await apply({ width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 } }, false);
+          Object.assign(quality, { width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 } });
         }
       }
-      if (capabilities.resizeMode?.includes('none')) await apply({ resizeMode: { ideal: 'none' } }, false);
+      if (capabilities.resizeMode?.includes('none') && settings.resizeMode !== 'none') quality.resizeMode = { ideal: 'none' };
+      if (Object.keys(quality).length) await apply(quality, false);
       if (canZoom && automatic) await applyZoom(zoomValue(1, range));
       readyDone = true;
       changed();
@@ -283,3 +306,4 @@ globalThis.QRCamera = (() => {
 
   return Object.freeze({ score, choose, open, tune, isFront, zoomValue, autoZoom, createController });
 })();
+

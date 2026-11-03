@@ -39,7 +39,8 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
   const video = get('video');
   video.videoWidth = 3840; video.videoHeight = 2160; video.readyState = 4;
   video.play = async () => {};
-  video.requestVideoFrameCallback = callback => frames.push(callback);
+  video.requestVideoFrameCallback = callback => { frames.push(callback); return callback; };
+  video.cancelVideoFrameCallback = callback => { const i = frames.indexOf(callback); if (i >= 0) frames.splice(i, 1); };
   const canvas = () => ({ width: 1, height: 1, getContext: () => ({
     drawImage() {}, getImageData: (x, y, width, height) => ({ width, height,
       data: new Uint8ClampedArray(width * height * 4) })
@@ -62,7 +63,7 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
           getSettings: () => settings, getConstraints: () => constraints.video,
           getCapabilities: () => ({ focusMode: ['continuous'], exposureMode: ['continuous'],
             whiteBalanceMode: ['continuous'], width: { max: 3840 }, height: { max: 2160 }, zoom: { min: 1, max: 8, step: 0.1 } }),
-          applyConstraints: async constraints => { Object.assign(settings, constraints.advanced?.[0]); },
+          applyConstraints: async constraints => { Object.assign(settings, ...(constraints.advanced || [])); },
           stop() { this.readyState = 'ended'; }, addEventListener() {}
         };
         tracks.push(track);
@@ -92,7 +93,7 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
   });
   context.window = context;
   if (native) context.BarcodeDetector = class { async detect() { return nextCodes; } };
-  for (const file of ['camera.js', 'app.js']) vm.runInContext(readFileSync(require.resolve('../' + file), 'utf8'), context);
+  for (const file of ['camera.js', 'scanner.js', 'app.js']) vm.runInContext(readFileSync(require.resolve('../' + file), 'utf8'), context);
   await flush(); await flush();
   return { get, context, tracks, storage, windowEvents,
     codes(value) { nextCodes = value ? [{ rawValue: value }] : []; },
@@ -158,6 +159,15 @@ test('a worker failure loads the local decoder and continues the same scan', asy
   assert.equal(h.mainDecodeCount, 1);
 });
 
+test('consecutive text QR codes retain the same focused camera instead of reopening it', async () => {
+  const h = await app();
+  h.codes('FIRST TEXT'); await h.frame();
+  h.codes('SECOND TEXT'); await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'SECOND TEXT');
+  assert.equal(h.tracks.length, 1);
+  assert.equal(h.tracks[0].readyState, 'live');
+});
+
 test('a hung worker times out and the local decoder recovers without restarting the camera', async () => {
   const h = await app({ native: false, workerHangs: true });
   h.codes('PCI QR v33');
@@ -173,3 +183,4 @@ test('permission failure leaves a working retry button and no live camera', asyn
   assert.equal(h.get('cameraButton').disabled, false);
   assert.equal(h.tracks.length, 0);
 });
+
