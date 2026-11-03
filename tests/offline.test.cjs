@@ -67,16 +67,16 @@ test('activation removes obsolete QR caches and preserves unrelated apps', async
 test('installed launch serves the cached scanner even when the network never responds', { timeout: 1000 }, async () => {
   const installed = await installedCache({ network: () => new Promise(() => {}) });
   const html = await (await installed.fetch('./', 'navigate')).text();
-  assert.match(html, /PCI QR · v35/);
+  assert.match(html, /PCI QR · v36/);
 });
 
 test('background shell refresh cannot strand offline users on uncached future scripts', async () => {
-  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=36"></script>') });
+  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=37"></script>') });
   await installed.fetch('./', 'navigate');
   await new Promise(setImmediate);
   const html = await (await installed.fetch('./', 'navigate')).text();
-  assert.match(html, /PCI QR · v35/);
-  assert.ok((await (await installed.fetch('./scanner.js?v=35')).text()).length > 100);
+  assert.match(html, /PCI QR · v36/);
+  assert.ok((await (await installed.fetch('./scanner.js?v=36')).text()).length > 100);
 });
 
 

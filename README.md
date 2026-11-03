@@ -14,6 +14,14 @@ A speed-first, installable QR scanner. The rear camera starts when the page open
 
 There is no build step, remote decoder, framework, external font, or CDN dependency.
 
+## v36: faster frame processing and Android icon
+
+The threaded decoder can process each fresh 30 fps frame when it is ready, instead of skipping alternate frames behind a 40 ms minimum. Decoding stays sequential, so slower devices never accumulate a frame queue. Precise video-frame timestamps prevent rounded playback time from suppressing fresh frames.
+
+Four bounded crop surfaces reuse the fast, detailed, wide and combined recovery buffers. After warming up at a stable preview size, these surfaces stop resizing between passes. Local decoding reads directly from the crop without allocating an unused second surface; native-decoder recovery creates CPU-readable surfaces.
+
+The new PCI icon uses a seamless optical-glass finish fading from navy to black, with cyan scanner accents. Android gets a full-bleed opaque maskable variant with the complete emblem inside the central safe circle; ordinary launcher, Apple touch, header and favicon sizes have dedicated PNG assets. The header uses the 96px variant (under 7 KB), and the document, manifest, assets and offline shell are versioned together.
+
 ## v35: cyberpunk polish
 
 Cyan acquisition corners with violet details, a restrained scan sweep, tap-to-focus feedback and a mint text-capture confirmation make camera states visible. Opening, scanning, paused, image-reading, detected-link and camera-error states follow the actual camera lifecycle. Controls, settings, history and results have short transitions; the live preview appears immediately. Small screens, landscape, safe areas, keyboard focus and reduced motion are supported. The camera and decoder algorithms are unchanged.
@@ -26,8 +34,8 @@ Cyan acquisition corners with violet details, a restrained scan sweep, tap-to-fo
 - Requests ideal 3840 × 2160 capture at 30 fps without a hard minimum. Capability negotiation supports portrait orientation and gracefully retains a working lower-resolution stream. Actual active settings are shown in the preview.
 - Scanning starts alongside tuning. Focus, exposure, white balance and supported points of interest use one driver call with independent optional constraint sets. Rejected combinations fall back independently. Already-current zoom is not reset unnecessarily. Manual focus/zoom controls and conservative automatic zoom remain available where exposed.
 - High capture detail is separate from decoding size. Ordinary native crops are capped at 768 pixels on the long side. Threaded fallback crops use 640, or 512 when recent decoding is slow. Every fifth attempt retains a detailed crop; every sixth checks the whole visible preview, with a quiet border around the guide. Fallback detailed passes use up to 1280 pixels when processing allows it. Uploaded images use up to 1600 pixels.
-- Preview geometry is reused between layout changes. Native detection avoids CPU pixel readback. The fallback transfers pixels to the worker without drawing a second copy of an already-sized crop.
-- Only one live decode can run at a time. Fresh video callbacks drive scanning; unchanged video frames are skipped. Threaded scanning has a 40 ms minimum interval, rather than the former 70 ms. Local main-thread fallback uses 90 ms to leave room for the interface. Device frame rate and actual decode cost also determine cadence.
+- Preview geometry is reused between layout changes. Native detection avoids CPU pixel readback. Four bounded crop surfaces avoid repeated resizing between recovery passes. The fallback transfers pixels to the worker without drawing a second copy of an already-sized crop.
+- Only one live decode can run at a time. Fresh video callbacks drive scanning; unchanged video frames are skipped using precise metadata where available. Native and threaded scanning use a 25 ms minimum interval. Local main-thread fallback uses 90 ms to leave room for the interface. Device frame rate and actual decode cost also determine cadence.
 - A native decode stalled for 1200 ms switches to the bundled decoder. Failed/stalled workers fall back locally. Stale results cannot open links after a camera stop/restart. Consecutive text codes keep the same focused camera; duplicate text is suppressed briefly.
 - Backgrounding, returning through browser history, manual stop/retry and interrupted cameras have explicit lifecycle guards. Camera streams from cancelled requests are released. Updates register after acquisition and do not reload an active scanner.
 - Installed launches return the cached document without waiting for network requests. Refresh runs in the background. Future documents do not replace the current offline shell before their matching worker/assets are installed.

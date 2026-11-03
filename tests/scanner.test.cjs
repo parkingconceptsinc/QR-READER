@@ -3,12 +3,14 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { readFileSync } = require('node:fs');
 
-function harness({ decode = async () => [], native = true } = {}) {
+function harness({ decode = async () => [], native = true, workerCostMs = 0 } = {}) {
   let now = 0;
   let nextId = 0;
   let reads = 0;
   let draws = 0;
   let layouts = 0;
+  let resizes = 0;
+  const contextOptions = [];
   const frames = new Map();
   const timers = new Map();
   const sizes = [];
@@ -24,7 +26,11 @@ function harness({ decode = async () => [], native = true } = {}) {
   };
   const context = vm.createContext({
     document: { createElement: () => {
-      const canvas = { width: 1, height: 1 };
+      let width = 1, height = 1;
+      const canvas = {
+        get width() { return width; }, set width(value) { resizes++; width = value; },
+        get height() { return height; }, set height(value) { resizes++; height = value; }
+      };
       const ctx = {
         drawImage() { draws++; },
         getImageData(x, y, width, height) {
@@ -32,7 +38,7 @@ function harness({ decode = async () => [], native = true } = {}) {
           return { width, height, data: new Uint8ClampedArray(width * height * 4) };
         }
       };
-      canvas.getContext = () => ctx;
+      canvas.getContext = (type, options) => { contextOptions.push(options); return ctx; };
       return canvas;
     } },
     addEventListener(type, callback) { events[type] = callback; },
@@ -40,7 +46,10 @@ function harness({ decode = async () => [], native = true } = {}) {
     setTimeout(callback, delay) { const id = ++nextId; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     Worker: class {
-      postMessage(message) { queueMicrotask(() => this.onmessage({ data: { id: message.id, codes: [] } })); }
+      postMessage(message) {
+        now += workerCostMs;
+        queueMicrotask(() => this.onmessage({ data: { id: message.id, codes: [] } }));
+      }
       terminate() {}
     }
   });
@@ -51,15 +60,16 @@ function harness({ decode = async () => [], native = true } = {}) {
   vm.runInContext(readFileSync(require.resolve('../scanner.js'), 'utf8'), context);
   const scanner = context.QRScanner.create({ video, stage, frame,
     onResult: value => results.push(value), onError: error => errors.push(error) });
-  return { scanner, video, results, errors, sizes, events,
+  return { scanner, video, results, errors, sizes, events, contextOptions,
     get reads() { return reads; }, get draws() { return draws; }, get layouts() { return layouts; },
+    get resizes() { return resizes; },
     get scheduled() { return frames.size; },
-    step(at, videoTime = at / 1000) {
+    step(at, videoTime = at / 1000, metadata) {
       now = at; video.currentTime = videoTime;
       const entry = frames.entries().next().value;
       assert.ok(entry, 'the next frame is scheduled');
       frames.delete(entry[0]);
-      return entry[1]();
+      return entry[1](at, metadata);
     },
     timeout(delay) {
       const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
@@ -121,4 +131,39 @@ test('threaded detection reads the crop directly and resumes on the next eligibl
   assert.equal(h.reads, 2);
   assert.equal(h.draws, 2, 'no extra full-canvas draw before transferring pixels');
   assert.equal(h.scheduled, 1);
+});
+
+test('a ready worker processes every fresh 30 fps frame without skipping alternate frames', async () => {
+  const h = harness({ native: false, workerCostMs: 8 }); h.scanner.start();
+  for (let i = 0; i < 30; i++) await h.step(i * 1000 / 30);
+  assert.equal(h.reads, 30);
+  assert.equal(h.draws, 30, 'each camera frame is captured only once');
+  assert.equal(h.scheduled, 1);
+});
+
+for (const native of [true, false]) test(`${native ? 'native' : 'threaded'} crop buffers stop resizing after all recovery profiles are warm`, async () => {
+  const h = harness({ native }); h.scanner.start();
+  for (let i = 0; i < 30; i++) await h.step(i * 50);
+  const warmResizes = h.resizes;
+  assert.equal(warmResizes, 8, 'four crop profiles allocate only their width and height');
+  for (let i = 30; i < 90; i++) await h.step(i * 50);
+  assert.equal(h.resizes, warmResizes, 'fast, detailed, wide and detailed-wide surfaces are reused');
+});
+
+test('precise frame metadata keeps scanning when currentTime is rounded, but repeated metadata is skipped', async () => {
+  const h = harness(); h.scanner.start();
+  await h.step(0, 1, { mediaTime: 1 });
+  await h.step(34, 1, { mediaTime: 1.034 });
+  await h.step(68, 1, { mediaTime: 1.034 });
+  await h.step(102, 1.1, { mediaTime: 1.102 });
+  assert.equal(h.sizes.length, 3);
+});
+
+test('native decoder recovery creates CPU-readable crops for the fallback', async () => {
+  const h = harness({ decode: async () => { throw new Error('Native decoder failed'); } });
+  h.scanner.start(); await h.step(0); await h.step(50);
+  assert.equal(h.scanner.mode, 'worker');
+  assert.ok(h.contextOptions.some(options => options?.willReadFrequently === false));
+  assert.equal(h.contextOptions.at(-1).willReadFrequently, true);
+  assert.equal(h.reads, 1);
 });
