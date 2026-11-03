@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const root = resolve(__dirname, '..');
 const scope = 'https://example.test/QR-READER/';
 
-async function installedCache() {
+async function installedCache({ network = async () => { throw new Error('Network offline'); } } = {}) {
   const events = {};
   const entries = new Map();
   const cacheKeys = ['unrelated-app', 'lector-qr-old'];
@@ -28,7 +28,7 @@ async function installedCache() {
     caches: { async open(key) { if (!cacheKeys.includes(key)) cacheKeys.push(key); return cache; },
       async keys() { return [...cacheKeys]; },
       async delete(key) { cacheKeys.splice(cacheKeys.indexOf(key), 1); }, match: request => cache.match(request) },
-    fetch: async () => { throw new Error('Network offline'); }
+    fetch: network
   });
   vm.runInContext(readFileSync(resolve(root, 'sw.js'), 'utf8'), context);
   for (const type of ['install', 'activate']) {
@@ -50,7 +50,7 @@ test('installed PWA loads its document, scripts, decoder worker and worker depen
   const scripts = [...html.matchAll(/<script[^>]+src="([^"]+)"/g)].map(match => match[1]);
   assert.ok(scripts.length > 0);
   for (const script of scripts) assert.ok((await (await installed.fetch(script)).text()).length > 100);
-  const app = await (await installed.fetch(scripts.find(script => script.includes('app.js')))).text();
+  const app = await (await installed.fetch(scripts.find(script => script.includes('scanner.js')))).text();
   const workerPath = app.match(/new Worker\('([^']+)'\)/)[1];
   const worker = await (await installed.fetch(workerPath)).text();
   const dependency = worker.match(/importScripts\('([^']+)'\)/)[1];
@@ -63,3 +63,19 @@ test('activation removes obsolete QR caches and preserves unrelated apps', async
   assert.ok(!installed.cacheKeys.includes('lector-qr-old'));
   assert.equal(installed.cacheKeys.filter(key => key.startsWith('lector-qr-')).length, 1);
 });
+
+test('installed launch serves the cached scanner even when the network never responds', { timeout: 1000 }, async () => {
+  const installed = await installedCache({ network: () => new Promise(() => {}) });
+  const html = await (await installed.fetch('./', 'navigate')).text();
+  assert.match(html, /PCI QR · v34/);
+});
+
+test('background shell refresh cannot strand offline users on uncached future scripts', async () => {
+  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=35"></script>') });
+  await installed.fetch('./', 'navigate');
+  await new Promise(setImmediate);
+  const html = await (await installed.fetch('./', 'navigate')).text();
+  assert.match(html, /PCI QR · v34/);
+  assert.ok((await (await installed.fetch('./scanner.js?v=34')).text()).length > 100);
+});
+

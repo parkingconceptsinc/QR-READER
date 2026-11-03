@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const context = vm.createContext({ DOMException });
 vm.runInContext(readFileSync(require.resolve('../camera.js'), 'utf8'), context);
 const camera = context.QRCamera;
+const image = request => Object.assign({}, ...(request.advanced || []));
 const flush = () => new Promise(setImmediate);
 const device = (deviceId, label) => ({ kind: 'videoinput', deviceId, label });
 
@@ -17,7 +18,7 @@ function makeTrack({ capabilities = {}, initial = {}, reject = () => false } = {
     applyConstraints: async constraints => {
       requests.push(structuredClone(constraints));
       if (reject(constraints)) throw new DOMException('Unsupported combination', 'OverconstrainedError');
-      Object.assign(settings, constraints.advanced?.[0]);
+      Object.assign(settings, ...(constraints.advanced || []));
       if (constraints.height?.ideal) { settings.width = constraints.width.ideal; settings.height = constraints.height.ideal; }
     }, stop() { this.readyState = 'ended'; }
   };
@@ -89,9 +90,9 @@ test('capability tuning increases detail and preserves camera identity and autof
   assert.equal(settings.height, 2160);
   assert.equal(settings.focusMode, 'continuous');
   assert.ok(requests.every(request => request.deviceId.exact === 'rear'));
-  assert.equal(requests.at(-1).advanced[0].focusMode, 'continuous');
-  assert.equal(requests.at(-1).advanced[0].exposureMode, 'continuous');
-  assert.equal(requests.at(-1).advanced[0].whiteBalanceMode, 'continuous');
+  assert.equal(image(requests.at(-1)).focusMode, 'continuous');
+  assert.equal(image(requests.at(-1)).exposureMode, 'continuous');
+  assert.equal(image(requests.at(-1)).whiteBalanceMode, 'continuous');
   assert.equal(requests.at(-1).resizeMode.ideal, 'none');
   assert.equal(settings.pointsOfInterest[0].x, 0.5);
 });
@@ -145,9 +146,10 @@ test('automatic zoom, manual adjustment and automatic reset preserve autofocus',
 test('a rejected zoom control disables only zoom and leaves focusing available', async () => {
   const { track, settings } = makeTrack({ initial: { zoom: 1 }, capabilities: {
     focusMode: ['continuous'], zoom: { min: 1, max: 8, step: 0.1 }
-  }, reject: request => Boolean(request.advanced?.[0].zoom) });
+  }, reject: request => Boolean(image(request).zoom) });
   const controller = camera.createController(track);
   await controller.ready;
+  await controller.setZoom(2);
   assert.equal(controller.snapshot().zoom, null);
   assert.equal(controller.snapshot().canFocus, true);
   assert.equal(settings.focusMode, 'continuous');
@@ -211,3 +213,4 @@ test('stopping or cancelling a controller prevents subsequent hardware changes',
   await controller.setZoom(3); await controller.refocus(); controller.tick(10000);
   assert.equal(requests.length, before);
 });
+

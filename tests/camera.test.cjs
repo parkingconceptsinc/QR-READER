@@ -49,6 +49,28 @@ test('opens the primary lens directly when names are already exposed', async () 
   assert.equal(result.stream.getVideoTracks()[0].readyState, 'live');
 });
 
+test('returning to the scanner reopens the verified lens without another enumeration; device changes invalidate it', async () => {
+  let enumerations = 0;
+  let deviceChanged;
+  let available = lenses;
+  const mediaDevices = {
+    addEventListener(type, callback) { if (type === 'devicechange') deviceChanged = callback; },
+    enumerateDevices: async () => { enumerations++; return available; },
+    getUserMedia: async request => streamFor(request.video.deviceId.exact)
+  };
+  let result = await camera.open({ mediaDevices, facingMode: 'environment' });
+  result.stream.getTracks().forEach(track => track.stop());
+  assert.equal(enumerations, 1);
+  result = await camera.open({ mediaDevices, facingMode: 'environment' });
+  assert.equal(enumerations, 1);
+  result.stream.getTracks().forEach(track => track.stop());
+  available = [device('better', 'Back Main Camera')];
+  deviceChanged();
+  result = await camera.open({ mediaDevices, facingMode: 'environment' });
+  assert.equal(enumerations, 2);
+  assert.equal(result.stream.getVideoTracks()[0].getSettings().deviceId, 'better');
+});
+
 test('uses labels unlocked by permission and releases the wrong lens before switching', async () => {
   let granted = false;
   const first = streamFor('ultra', 'Back Ultra Wide Camera');
@@ -120,14 +142,14 @@ test('tuning retains autofocus when exposure is rejected and white balance succe
     getCapabilities: () => ({ focusMode: ['continuous', 'manual'], exposureMode: ['continuous'], whiteBalanceMode: ['continuous'] }),
     applyConstraints: async constraints => {
       requests.push(constraints);
-      if (constraints.advanced[0].exposureMode) throw new Error('Unsupported combination');
+      if (constraints.advanced.some(set => set.exposureMode)) throw new Error('Unsupported combination');
     }
   });
-  assert.equal(requests.length, 3);
-  assert.equal(requests[2].advanced[0].focusMode, 'continuous');
-  assert.equal(requests[2].advanced[0].whiteBalanceMode, 'continuous');
-  assert.equal(requests[2].advanced[0].exposureMode, undefined);
-  assert.equal(requests[2].width.ideal, 1920);
+  assert.equal(requests.length, 4);
+  assert.equal(Object.assign({}, ...requests.at(-1).advanced).focusMode, 'continuous');
+  assert.equal(Object.assign({}, ...requests.at(-1).advanced).whiteBalanceMode, 'continuous');
+  assert.equal(Object.assign({}, ...requests.at(-1).advanced).exposureMode, undefined);
+  assert.equal(requests.at(-1).width.ideal, 1920);
 });
 
 test('tuning tolerates missing controls and stops touching a cancelled session', async () => {
@@ -138,3 +160,4 @@ test('tuning tolerates missing controls and stops touching a cancelled session',
     applyConstraints: async () => calls++ }, () => false);
   assert.equal(calls, 0);
 });
+
