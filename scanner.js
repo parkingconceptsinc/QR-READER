@@ -19,7 +19,7 @@ globalThis.QRScanner = (() => {
     }
     try {
       if (typeof Worker === 'function') {
-        worker = new Worker('./scan-worker.js?v=35');
+        worker = new Worker('./scan-worker.js?v=36');
         worker.onmessage = ({ data }) => {
           const request = pending.get(data.id);
           if (!request) return;
@@ -60,11 +60,13 @@ globalThis.QRScanner = (() => {
         const scale = Math.min(1, (live ? 1280 : 1600) / Math.max(width, height));
         const w = Math.max(1, Math.round(width * scale));
         const h = Math.max(1, Math.round(height * scale));
-        if (canvas.width !== w) canvas.width = w;
-        if (canvas.height !== h) canvas.height = h;
         const pixelsContext = live && width === w && height === h && source.getContext
           ? source.getContext('2d', { willReadFrequently: true }) : context;
-        if (pixelsContext === context) context.drawImage(source, 0, 0, w, h);
+        if (pixelsContext === context) {
+          if (canvas.width !== w) canvas.width = w;
+          if (canvas.height !== h) canvas.height = h;
+          context.drawImage(source, 0, 0, w, h);
+        }
         let pixels = pixelsContext.getImageData(0, 0, w, h);
         const inversionAttempts = !live || ++frameCount % 5 === 0 ? 'attemptBoth' : 'dontInvert';
         if (worker) {
@@ -90,7 +92,6 @@ globalThis.QRScanner = (() => {
   }
 
   function create({ video, stage, frame, onResult, onError, onTick = () => {} }) {
-    const canvas = document.createElement('canvas');
     let detector;
     let native = false;
     try {
@@ -98,8 +99,17 @@ globalThis.QRScanner = (() => {
       detector = new BarcodeDetector({ formats: ['qr_code'] });
       native = true;
     } catch { detector = fallbackDetector(); }
-    // Only the local decoder needs a synchronous CPU pixel readback.
-    const context = canvas.getContext('2d', { willReadFrequently: !native });
+    // Keep one bounded surface per crop profile. Alternating detailed/wide
+    // passes must not reallocate the ordinary crop on the following frame.
+    const surfaces = new Map();
+    function surface(profile) {
+      if (!surfaces.has(profile)) {
+        const canvas = document.createElement('canvas');
+        surfaces.set(profile, { canvas,
+          context: canvas.getContext('2d', { willReadFrequently: !native }) });
+      }
+      return surfaces.get(profile);
+    }
     let running = false;
     let failed = false;
     let epoch = 0;
@@ -124,7 +134,7 @@ globalThis.QRScanner = (() => {
     function capture(now) {
       const width = video.videoWidth;
       const height = video.videoHeight;
-      if (!context || !width || !height) return video;
+      if (!width || !height) return video;
       if (!geometry || geometry.width !== width || geometry.height !== height || now - geometryAt > 500) {
         const s = stage.getBoundingClientRect();
         const f = frame.getBoundingClientRect();
@@ -146,6 +156,8 @@ globalThis.QRScanner = (() => {
       const limit = native ? (detailed ? 1600 : wide ? 960 : 768)
         : detailed || wide ? (detector.threaded && averageMs < 140 ? 1280 : 960)
           : averageMs > 100 ? 512 : 640;
+      const { canvas, context } = surface(wide ? (detailed ? 'wide-detail' : 'wide') : detailed ? 'detail' : 'fast');
+      if (!context) return video;
       const scale = Math.min(1, limit / Math.max(sw, sh));
       const w = Math.max(1, Math.round(sw * scale));
       const h = Math.max(1, Math.round(sh * scale));
@@ -164,10 +176,10 @@ globalThis.QRScanner = (() => {
     function schedule() {
       if (!running || failed || frameHandle !== null || job) return;
       const current = epoch;
-      const callback = () => {
+      const callback = (timestamp, metadata) => {
         if (current !== epoch) return;
         frameHandle = null;
-        return scan(current);
+        return scan(current, metadata?.mediaTime);
       };
       frameHandle = video.requestVideoFrameCallback
         ? video.requestVideoFrameCallback(callback) : requestAnimationFrame(callback);
@@ -184,20 +196,24 @@ globalThis.QRScanner = (() => {
         ]);
       } finally { clearTimeout(timer); }
     }
-    async function scan(current) {
+    async function scan(current, mediaTime) {
       if (!running || current !== epoch || failed) return;
       const now = performance.now();
       onTick(now);
       // One decode at a time. The fallback resumes on the next fresh frame;
       // no extra fixed 70 ms pause after an expensive decode.
-      const interval = native ? 25 : detector.threaded ? 40 : 90;
+      // A 40 ms minimum skips every other 30 fps camera frame even when the
+      // worker is ready. Slow decoders still apply backpressure through job.
+      const interval = native || detector.threaded ? 25 : 90;
+      // Frame metadata stays precise when privacy settings round currentTime.
+      const videoTime = Number.isFinite(mediaTime) ? mediaTime : video.currentTime;
       if (job || video.readyState < 2 || now - lastAttempt < interval ||
-          (Number.isFinite(video.currentTime) && video.currentTime === lastVideoTime)) {
+          (Number.isFinite(videoTime) && videoTime === lastVideoTime)) {
         schedule();
         return;
       }
       lastAttempt = now;
-      lastVideoTime = video.currentTime;
+      lastVideoTime = videoTime;
       count++;
       job = (async () => {
         try {
@@ -213,6 +229,7 @@ globalThis.QRScanner = (() => {
           if (native) {
             detector = fallbackDetector();
             native = false;
+            surfaces.clear(); // New fallback surfaces favor CPU pixel readback.
             errors = 0;
           } else if (++errors >= 3 || error.message?.startsWith('The built-in QR decoder')) {
             failed = true;
@@ -230,7 +247,7 @@ globalThis.QRScanner = (() => {
         cancelFrame();
         epoch++;
         running = true;
-        if (failed) { detector.dispose?.(); detector = fallbackDetector(); native = false; }
+        if (failed) { detector.dispose?.(); detector = fallbackDetector(); native = false; surfaces.clear(); }
         failed = false;
         errors = count = averageMs = 0;
         lastAttempt = geometryAt = -Infinity;
@@ -246,6 +263,7 @@ globalThis.QRScanner = (() => {
         catch (error) {
           if (!native) throw error;
           detector = fallbackDetector(); native = false;
+          surfaces.clear();
           return detector.detect(source, false);
         }
       },

@@ -1,5 +1,5 @@
 {
-  "name": "PCI \u00b7 QR Scanner",
+  "name": "PCI · QR Scanner",
   "short_name": "PCI QR",
   "description": "Scan QR codes with your camera or from an image.",
   "start_url": "./",
@@ -10,19 +10,19 @@
   "lang": "en",
   "icons": [
     {
-      "src": "./icons/pci-qr-192-v6.png",
+      "src": "./icons/pci-qr-192-v7.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/pci-qr-512-v6.png",
+      "src": "./icons/pci-qr-512-v7.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/pci-qr-maskable-v6.png",
+      "src": "./icons/pci-qr-maskable-v7.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

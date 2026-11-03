@@ -1,5 +1,5 @@
-const CACHE = 'lector-qr-v35';
-const ASSETS = ['./', './index.html', './styles.css?v=35', './app.js?v=35', './camera.js?v=35', './scanner.js?v=35', './scan-worker.js?v=35', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png'];
+const CACHE = 'lector-qr-v36';
+const ASSETS = ['./', './index.html', './styles.css?v=36', './app.js?v=36', './camera.js?v=36', './scanner.js?v=36', './scan-worker.js?v=36', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest?v=36', './icons/pci-qr-48-v7.png', './icons/pci-qr-96-v7.png', './icons/pci-qr-192-v7.png', './icons/pci-qr-512-v7.png', './icons/pci-qr-180-v7.png', './icons/pci-qr-maskable-v7.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
@@ -19,7 +19,7 @@ self.addEventListener('fetch', event => {
       const html = await response.clone().text();
       // A newer document must be installed with its own offline dependencies.
       // Keep this version usable if connectivity drops during an update.
-      if (!html.includes('./app.js?v=35') || !html.includes('./scanner.js?v=35')) return response;
+      if (!html.includes('./app.js?v=36') || !html.includes('./scanner.js?v=36')) return response;
       const cache = await cacheReady;
       await Promise.all([
         cache.put(event.request, response.clone()),
