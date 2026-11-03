@@ -1,7 +1,7 @@
-const CACHE = 'lector-qr-v31';
-const ASSETS = ['./', './index.html', './styles.css', './app.js', './app.js?v=27', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
+const CACHE = 'lector-qr-v32';
+const ASSETS = ['./', './index.html', './styles.css', './styles.css?v=32', './app.js', './app.js?v=32', './camera.js?v=32', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
   event.waitUntil(Promise.all([caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('lector-qr-') && key !== CACHE).map(key => caches.delete(key)))), self.clients.claim()]));
@@ -34,23 +34,14 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // The script URL is versioned in index.html and precached with the worker.
-  if (new URL(event.request.url).pathname.endsWith('/app.js')) {
+  // Match versioned scripts exactly. Substituting a different app version can
+  // combine an old document with new dependencies during a worker update.
+  if (/\/(app|camera)\.js$/.test(new URL(event.request.url).pathname)) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match(event.request);
       if (cached) return cached;
-      const versionedUrl = new URL('./app.js?v=27', self.registration.scope).href;
-      const versioned = await cache.match(versionedUrl);
-      if (versioned) return versioned;
-      try {
-        const response = await fetch(event.request);
-        if (response.ok) event.waitUntil(cache.put(event.request, response.clone()));
-        return response;
-      } catch {
-        const unversionedUrl = new URL('./app.js', self.registration.scope).href;
-        return (await cache.match(unversionedUrl)) || Response.error();
-      }
+      return fetch(event.request, { cache: 'no-cache' });
     })());
     return;
   }

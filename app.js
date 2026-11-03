@@ -8,6 +8,9 @@ let detectorMode = 'none';
 let decoderFailed = false;
 let scanning = false;
 let facingMode = 'environment';
+let selectedCameraId = '';
+const cameraPreferenceKey = 'pci-qr-camera-v1';
+try { selectedCameraId = localStorage.getItem(cameraPreferenceKey) || ''; } catch {}
 let cameraRecoveryAttempts = 0;
 let cameraRecoveryTimer = null;
 let cameraMuteTimer = null;
@@ -20,6 +23,7 @@ let navigating = false;
 let manuallyStopped = false;
 let installPrompt = null;
 let lastScanAt = 0;
+let scanFrameCount = 0;
 let detectorBusy = false;
 let lastDecodedValue = '';
 let lastDecodedAt = 0;
@@ -28,8 +32,7 @@ const historyKey = 'lector-qr-history-v1';
 const decoderUrl = './vendor/jsQR.js';
 const NATIVE_SCAN_INTERVAL_MS = 33;
 const FALLBACK_SCAN_INTERVAL_MS = 70;
-const FALLBACK_MAX_DIMENSION = 768;
-const SCAN_FRAME_DIMENSION = 768;
+const FALLBACK_MAX_DIMENSION = 960;
 const scanCanvas = document.createElement('canvas');
 const scanContext = scanCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -54,7 +57,7 @@ function fallbackDetector() {
       const height = source.videoHeight || source.height;
       if (!width || !height) return [];
       const isLiveVideo = source === video || source === canvas;
-      const maxDimension = isLiveVideo ? FALLBACK_MAX_DIMENSION : 1600;
+      const maxDimension = source === canvas ? Math.max(width, height) : isLiveVideo ? FALLBACK_MAX_DIMENSION : 1600;
       const scale = Math.min(1, maxDimension / Math.max(width, height));
       const targetWidth = Math.max(1, Math.round(width * scale));
       const targetHeight = Math.max(1, Math.round(height * scale));
@@ -71,7 +74,7 @@ function fallbackDetector() {
   };
 }
 
-function captureScanRegion() {
+function captureScanRegion(wide = false) {
   const width = video.videoWidth;
   const height = video.videoHeight;
   const stageRect = stage.getBoundingClientRect();
@@ -81,17 +84,53 @@ function captureScanRegion() {
   const fitScale = Math.max(stageRect.width / width, stageRect.height / height);
   const centerX = width / 2 + (frameRect.left + frameRect.width / 2 - stageRect.left - stageRect.width / 2) / (fitScale);
   const centerY = height / 2 + (frameRect.top + frameRect.height / 2 - stageRect.top - stageRect.height / 2) / (fitScale);
-  const sourceWidth = frameRect.width / (fitScale);
-  const sourceHeight = frameRect.height / (fitScale);
+  // Leave a quiet border around the QR and periodically inspect the whole visible
+  // preview, so a large/off-center code is not permanently clipped by the guide.
+  const sourceWidth = (wide ? stageRect.width : frameRect.width * 1.18) / fitScale;
+  const sourceHeight = (wide ? stageRect.height : frameRect.height * 1.18) / fitScale;
   const sx = Math.max(0, Math.min(width - 1, centerX - sourceWidth / 2));
   const sy = Math.max(0, Math.min(height - 1, centerY - sourceHeight / 2));
   const sw = Math.max(1, Math.min(width - sx, sourceWidth));
   const sh = Math.max(1, Math.min(height - sy, sourceHeight));
 
-  if (scanCanvas.width !== SCAN_FRAME_DIMENSION) scanCanvas.width = SCAN_FRAME_DIMENSION;
-  if (scanCanvas.height !== SCAN_FRAME_DIMENSION) scanCanvas.height = SCAN_FRAME_DIMENSION;
-  scanContext.drawImage(video, sx, sy, sw, sh, 0, 0, SCAN_FRAME_DIMENSION, SCAN_FRAME_DIMENSION);
+  const maxDimension = detectorMode === 'native' ? 1280 : wide ? FALLBACK_MAX_DIMENSION : 768;
+  const scale = Math.min(1, maxDimension / Math.max(sw, sh));
+  const targetWidth = Math.max(1, Math.round(sw * scale));
+  const targetHeight = Math.max(1, Math.round(sh * scale));
+  if (scanCanvas.width !== targetWidth) scanCanvas.width = targetWidth;
+  if (scanCanvas.height !== targetHeight) scanCanvas.height = targetHeight;
+  scanContext.drawImage(video, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
   return scanCanvas;
+}
+
+function renderCameraOptions(devices, track) {
+  const settings = track.getSettings?.() || {};
+  if (['user', 'environment'].includes(settings.facingMode)) facingMode = settings.facingMode;
+  const select = $('cameraSelect');
+  select.replaceChildren(new Option(`Automatic · ${facingMode === 'user' ? 'Front' : 'Rear'} camera`, ''));
+  for (const [index, device] of devices.entries()) {
+    if (device.deviceId) select.add(new Option(device.label || `Camera ${index + 1}`, device.deviceId));
+  }
+  if (selectedCameraId && selectedCameraId !== settings.deviceId) rememberCamera('');
+  select.value = selectedCameraId;
+  $('cameraPicker').hidden = devices.filter(device => device.deviceId).length < 2;
+}
+
+function rememberCamera(id) {
+  selectedCameraId = id;
+  try {
+    if (id) localStorage.setItem(cameraPreferenceKey, id);
+    else localStorage.removeItem(cameraPreferenceKey);
+  } catch {}
+}
+
+function updateCameraHint(track) {
+  const settings = track.getSettings?.() || {};
+  const details = [track.label || 'Camera'];
+  if (settings.width && settings.height) details.push(`${settings.width} × ${settings.height}`);
+  if (settings.focusMode === 'continuous') details.push('Autofocus');
+  $('cameraHint').textContent = details.join(' · ');
+  $('cameraHint').title = details.join(' · ');
 }
 
 function showCameraFailure(message) {
@@ -228,6 +267,7 @@ function stopCamera() {
   stage.classList.remove('active');
   $('liveBadge').hidden = true;
   $('switchButton').hidden = true;
+  $('cameraPicker').hidden = true;
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start scanning';
   $('cameraHint').textContent = 'Camera ready · Scan again instantly';
 }
@@ -252,28 +292,10 @@ async function startCamera(force = false) {
   $('cameraButton').disabled = true;
   say('Requesting camera access…');
   try {
-    // Prefer the rear camera without requiring an exact match; strict constraints can
-    // reject valid Android camera devices and leave the preview blank.
-    const videoConstraints = {
-      facingMode: { ideal: facingMode },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
-      frameRate: { ideal: 30 }
-    };
-    let openedStream;
-    try {
-      openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
-    } catch (cameraError) {
-      if (!['OverconstrainedError', 'NotFoundError'].includes(cameraError.name)) throw cameraError;
-      try {
-        openedStream = await navigator.mediaDevices.getUserMedia({
-          audio: false, video: { facingMode: { ideal: facingMode } }
-        });
-      } catch (fallbackError) {
-        if (!['OverconstrainedError', 'NotFoundError'].includes(fallbackError.name)) throw fallbackError;
-        openedStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
-      }
-    }
+    const { stream: openedStream, devices } = await QRCamera.open({
+      mediaDevices: navigator.mediaDevices, facingMode, deviceId: selectedCameraId,
+      isCurrent: () => activeSession === session
+    });
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     stream = openedStream;
     video.muted = true;
@@ -294,15 +316,22 @@ async function startCamera(force = false) {
     }, 8000);
     detectorErrorCount = 0;
     lastScanAt = 0;
+    scanFrameCount = 0;
     $('cameraButton').disabled = false;
     stage.classList.add('active');
     $('liveBadge').hidden = false;
     $('switchButton').hidden = false;
-    monitorCameraTrack(stream.getVideoTracks()[0], activeSession);
+    const track = stream.getVideoTracks()[0];
+    monitorCameraTrack(track, activeSession);
+    renderCameraOptions(devices, track);
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
-    $('cameraHint').textContent = 'Center the code · Scanning automatically';
+    updateCameraHint(track);
     say('Scanning automatically. Point at a QR code.');
     scheduleScan(activeSession);
+    // Tuning runs alongside decoding, never holding up the first scan.
+    QRCamera.tune(track, () => activeSession === session).then(() => {
+      if (activeSession === session) updateCameraHint(track);
+    }).catch(() => {});
   } catch (error) {
     if (activeSession !== session) return;
     stopCamera();
@@ -338,7 +367,7 @@ async function scanFrame(activeSession) {
     lastScanAt = now;
     try {
       const activeDetector = detector;
-      const codes = await activeDetector.detect(captureScanRegion());
+      const codes = await activeDetector.detect(captureScanRegion(++scanFrameCount % 6 === 0));
       detectorBusy = false;
       detectorErrorCount = 0;
       if (!scanning || activeSession !== session) {
@@ -431,9 +460,16 @@ $('cameraButton').addEventListener('click', () => {
   } else startCamera(true);
 });
 $('switchButton').addEventListener('click', () => {
+  rememberCamera('');
   facingMode = facingMode === 'environment' ? 'user' : 'environment';
   stopCamera();
   startCamera();
+});
+$('cameraSelect').addEventListener('change', event => {
+  rememberCamera(event.target.value);
+  if (!selectedCameraId) facingMode = 'environment';
+  stopCamera();
+  startCamera(true);
 });
 $('fileInput').addEventListener('change', event => {
   readFile(event.target.files[0]);
@@ -507,7 +543,7 @@ if ('serviceWorker' in navigator) {
   let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) { hadController = true; return; }
-    const refreshKey = 'qr-reader-worker-v27';
+    const refreshKey = 'qr-reader-worker-v32';
     if (sessionStorage.getItem(refreshKey)) return;
     sessionStorage.setItem(refreshKey, '1');
     location.reload();
