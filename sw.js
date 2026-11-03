@@ -1,5 +1,5 @@
-const CACHE = 'lector-qr-v32';
-const ASSETS = ['./', './index.html', './styles.css', './styles.css?v=32', './app.js', './app.js?v=32', './camera.js?v=32', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
+const CACHE = 'lector-qr-v33';
+const ASSETS = ['./', './index.html', './styles.css', './styles.css?v=33', './app.js', './app.js?v=33', './camera.js?v=33', './scan-worker.js?v=33', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest', './icons/pci-qr-192-v6.png', './icons/pci-qr-512-v6.png', './icons/pci-qr-180-v6.png', './icons/pci-qr-maskable-v6.png', './icons/pci-logo.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
@@ -36,7 +36,7 @@ self.addEventListener('fetch', event => {
 
   // Match versioned scripts exactly. Substituting a different app version can
   // combine an old document with new dependencies during a worker update.
-  if (/\/(app|camera)\.js$/.test(new URL(event.request.url).pathname)) {
+  if (/\/(app|camera|scan-worker)\.js$/.test(new URL(event.request.url).pathname)) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match(event.request);

@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/pci-qr-192-v6.png" type="image/png">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/pci-qr-180-v6.png">
-  <link rel="stylesheet" href="./styles.css?v=32">
+  <link rel="stylesheet" href="./styles.css?v=33">
   <title>PCI · QR Scanner</title>
 </head>
 <body>
@@ -38,7 +38,12 @@
       </div>
       <div class="controls">
         <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Opening camera…</button>
-        <button id="switchButton" class="icon-button" title="Switch camera" aria-label="Switch camera" hidden>⇄</button>
+        <button id="focusButton" class="icon-button" title="Refocus rear camera" aria-label="Refocus rear camera" hidden>◎</button>
+      </div>
+      <div id="zoomControls" class="zoom-controls" hidden>
+        <label for="zoomRange">Zoom <output id="zoomValue" for="zoomRange">1.0×</output></label>
+        <input id="zoomRange" type="range" min="1" max="1" step="0.1" value="1" aria-label="Rear camera zoom">
+        <button id="autoZoomButton" class="text-button" aria-pressed="true">Auto</button>
       </div>
       <label id="cameraPicker" class="camera-picker" hidden>Camera
         <select id="cameraSelect" aria-label="Choose camera lens"></select>
@@ -63,9 +68,9 @@
       <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
       <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
     </section>
-    <footer>PCI QR · v32 · Camera first. Instant scans. No extra steps.</footer>
+    <footer>PCI QR · v33 · Best rear camera. Adaptive scanning.</footer>
   </main>
-  <script src="./camera.js?v=32" defer></script>
-  <script src="./app.js?v=32" defer></script>
+  <script src="./camera.js?v=33" defer></script>
+  <script src="./app.js?v=33" defer></script>
 </body>
 </html>
