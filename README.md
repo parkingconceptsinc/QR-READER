@@ -14,6 +14,12 @@ A speed-first, installable QR scanner. The rear camera starts when the page open
 
 There is no build step, remote decoder, framework, external font, or CDN dependency.
 
+## v38 consecutive scans
+
+The camera accepts a different QR immediately, including when the previous label is also detected. When the camera has seen a clear view for several fresh frames, another label with the same contents can be scanned. Returning with the old label still in view keeps the scanner ready. Live text results leave the viewfinder in place.
+
+After a successful scan, the bundled decoder checks occasional wide frames if native detection keeps missing the next code. A moving preview that stops delivering video callbacks can continue scanning on the same stream.
+
 ## v37 camera and Back recovery
 
 New QR links still open automatically. When Back returns to the scanner, the last opened QR stays available through **Open link**. A different code scans immediately. The scanner records the last link on its existing history entry so this also works when the browser rebuilds the page. Chrome may skip a page that opened a link before the user interacted with it. [Chromium history behavior](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/history_manipulation_intervention.md)

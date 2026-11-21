@@ -18,7 +18,7 @@ function element(id) {
 }
 
 async function app({ native = true, workerFails = false, workerHangs = false, denied = false,
-  historyState = null, setup, scriptLoader } = {}) {
+  historyState = null, setup, scriptLoader, nativeDetect = codes => codes } = {}) {
   const elements = new Map();
   const storage = new Map([['pci-qr-camera-v1', 'front']]);
   const frames = [];
@@ -89,7 +89,8 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
     performance: { now: () => time }, Date: class extends Date { static now() { return time; } },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
-    requestAnimationFrame: callback => frames.push(callback),
+    requestAnimationFrame: callback => { frames.push(callback); return callback; },
+    cancelAnimationFrame(callback) { const i = frames.indexOf(callback); if (i >= 0) frames.splice(i, 1); },
     Option: function(text, value) { this.text = text; this.value = value; },
     isSecureContext: true, addEventListener(type, callback) { windowEvents[type] = callback; },
     Worker: class {
@@ -104,7 +105,7 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
   });
   context.window = context;
   setup?.(context);
-  if (native) context.BarcodeDetector = class { async detect() { return nextCodes; } };
+  if (native) context.BarcodeDetector = class { async detect() { return nativeDetect(nextCodes); } };
   for (const file of ['camera.js', 'scanner.js', 'app.js']) vm.runInContext(readFileSync(require.resolve('../' + file), 'utf8'), context);
   await flush(); await flush();
   return { get, context, tracks, storage, windowEvents, visits,
@@ -112,7 +113,7 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
     advance(ms) { time += ms; },
     get frameCount() { return frames.length; },
     hasTimer(delay) { return [...timers.values()].some(timer => timer.delay === delay); },
-    codes(value) { nextCodes = value ? [{ rawValue: value }] : []; },
+    codes(...values) { nextCodes = values.filter(Boolean).map(rawValue => ({ rawValue })); },
     async frame(mediaTime) {
       time += 100;
       video.currentTime = mediaTime ?? time / 1000;
@@ -290,6 +291,104 @@ test('Back into a rebuilt document remembers only the QR opened from that histor
   const fresh = await app();
   fresh.codes(firstLink); await fresh.frame();
   assert.deepEqual(fresh.visits, [firstLink]);
+});
+
+for (const mode of [{}, { native: false }, { native: false, workerFails: true }]) {
+  const label = mode.workerFails ? 'local' : mode.native === false ? 'worker' : 'native';
+  test(`${label} accepts a second label with the same URL after the view has cleared`, async () => {
+    const h = await app(mode);
+    h.codes(firstLink); await h.frame();
+    h.windowEvents.pagehide(); h.context.location.href = scannerURL;
+    h.windowEvents.pageshow({ persisted: true }); await flush();
+    for (let i = 0; i < 12; i++) await h.frame();
+    assert.deepEqual(h.visits, [firstLink], 'a held label must not send Back into a loop');
+    h.codes(null);
+    for (let i = 0; i < 18; i++) await h.frame();
+    assert.equal(h.context.history.state.qrReturnValue, '');
+    h.codes(firstLink); await h.frame();
+    assert.deepEqual(h.visits, [firstLink, firstLink]);
+  });
+}
+
+test('the new URL wins when both labels are reported, without alternating between them after Back', async () => {
+  const h = await app({ historyState: { qrReturnValue: firstLink } });
+  h.codes(firstLink, nextLink); await h.frame();
+  assert.deepEqual(h.visits, [nextLink]);
+  const rebuilt = await app({ historyState: structuredClone(h.context.history.state) });
+  rebuilt.codes(nextLink, firstLink);
+  for (let i = 0; i < 12; i++) await rebuilt.frame();
+  assert.deepEqual(rebuilt.visits, []);
+  rebuilt.codes(firstLink, nextLink, 'https://example.com/third'); await rebuilt.frame();
+  assert.deepEqual(rebuilt.visits, ['https://example.com/third']);
+});
+
+test('live text leaves the camera in view and a held first text does not hide or repeatedly save the second', async () => {
+  const h = await app();
+  let scrolls = 0;
+  h.get('result').scrollIntoView = () => scrolls++;
+  h.codes('ONE'); await h.frame();
+  for (let i = 0; i < 16; i++) await h.frame();
+  h.codes('ONE', 'TWO'); await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'TWO');
+  h.codes('TWO', 'ONE');
+  for (let i = 0; i < 16; i++) await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'TWO');
+  assert.equal(scrolls, 0);
+  assert.equal(h.tracks.length, 1);
+  assert.equal(h.tracks[0].readyState, 'live');
+});
+
+for (const stale of [false, true]) test(`the next link opens if the native decoder keeps returning ${stale ? 'the old code' : 'empty frames'}`, async () => {
+  let afterBack = false;
+  const h = await app({ nativeDetect: codes => afterBack ? (stale ? [{ rawValue: firstLink }] : []) : codes });
+  h.codes(firstLink); await h.frame();
+  h.windowEvents.pagehide(); h.context.location.href = scannerURL;
+  afterBack = true;
+  h.windowEvents.pageshow({ persisted: true }); await flush();
+  h.codes(nextLink);
+  for (let i = 0; i < 24 && h.visits.length === 1; i++) await h.frame();
+  assert.deepEqual(h.visits, [firstLink, nextLink]);
+  assert.equal(h.tracks.length, 2);
+});
+
+test('a single blank read and time spent in the background cannot release the previous QR', async () => {
+  const h = await app({ historyState: { qrReturnValue: firstLink } });
+  h.codes(firstLink); await h.frame();
+  h.codes(null); await h.frame(); await h.frame();
+  h.visibility(true); h.advance(60000); h.visibility(false); await flush();
+  await h.frame(); h.advance(60000); await h.frame();
+  h.codes(firstLink); await h.frame();
+  assert.deepEqual(h.visits, []);
+});
+
+test('Back into a rebuilt document keeps the decoder that recovered the previous scan', async () => {
+  const first = await app({ historyState: { qrReturnValue: firstLink },
+    nativeDetect: () => [{ rawValue: firstLink }] });
+  first.codes(nextLink);
+  for (let i = 0; i < 20 && !first.visits.length; i++) await first.frame();
+  assert.deepEqual(first.visits, [nextLink]);
+  let nativeCalls = 0;
+  const again = await app({ historyState: structuredClone(first.context.history.state),
+    nativeDetect() { nativeCalls++; return [{ rawValue: firstLink }]; } });
+  again.codes(nextLink); await again.frame();
+  again.codes(null);
+  for (let i = 0; i < 18; i++) await again.frame();
+  again.codes(nextLink); await again.frame();
+  assert.deepEqual(again.visits, [nextLink]);
+  assert.equal(nativeCalls, 0);
+});
+
+test('the next QR is read on the same live camera when video callbacks stop but playback advances', async () => {
+  const h = await app();
+  h.codes('FIRST'); await h.frame();
+  h.advance(4200); h.get('video').currentTime += 4.2;
+  h.runTimer(4000);
+  h.codes('NEXT'); await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'NEXT');
+  assert.equal(h.tracks.length, 1);
+  assert.equal(h.tracks[0].readyState, 'live');
+  h.get('cameraButton').fire('click');
+  assert.equal(h.frameCount, 0);
 });
 
 test('a manually stopped camera stays stopped through hidden and visible history restores', async () => {

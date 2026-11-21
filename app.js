@@ -23,11 +23,15 @@ let resumeOnVisible = document.hidden;
 let navigating = false;
 let navigationTimer = null;
 let lastOpenedQR = history.state?.qrReturnValue || '';
+const heldCodes = new Set(lastOpenedQR ? [lastOpenedQR] : []);
+if (lastOpenedQR && Array.isArray(history.state?.qrHeldValues)) {
+  for (const value of history.state.qrHeldValues) if (typeof value === 'string') heldCodes.add(value);
+}
 let showedRepeatLink = false;
+let lastBlankFrame = null;
+let blankDuration = 0;
 let manuallyStopped = false;
 let installPrompt = null;
-let lastDecodedValue = '';
-let lastDecodedAt = 0;
 let restartTimer = null;
 let feedbackTimer = null;
 let focusAnimation = null;
@@ -75,23 +79,34 @@ function focusFeedback(x = 0.5, y = 0.5) {
 const historyKey = 'lector-qr-history-v1';
 const scanner = QRScanner.create({
   video, stage, frame: $('scanFrame'),
+  preferFallback: history.state?.qrUseFallback === true,
+  isHeld: value => heldCodes.has(value),
   onTick: now => cameraControls?.tick(now),
   onStall: () => reconnectCamera(session, 'Camera preview stopped updating.'),
-  onResult(value) {
-    if (value === lastOpenedQR) {
-      if (!showedRepeatLink) {
-        showedRepeatLink = true;
-        displayResult(value, safeUrl(value), false);
-        say('Ready for another QR. To revisit this one, use Open link.');
+  onDetections(codes, now, wide) {
+    if (!codes.length) {
+      if (!heldCodes.size) return;
+      // Count only decoded, fresh frames. Time spent away, a frozen preview
+      // and a single missed decode cannot release a QR that is still in view.
+      if (lastBlankFrame !== null) blankDuration += Math.min(now - lastBlankFrame, 250);
+      lastBlankFrame = now;
+      if (wide && blankDuration >= 800) {
+        heldCodes.clear();
+        if (lastOpenedQR) rememberOpenedQR('');
+        say('Ready for the next QR.');
       }
       return;
     }
-    const time = Date.now();
-    if (value === lastDecodedValue && time - lastDecodedAt < 1200) return;
-    lastDecodedValue = value;
-    lastDecodedAt = time;
-    showResult(value);
-    // Text codes keep the already focused camera running for the next scan.
+    lastBlankFrame = null;
+    blankDuration = 0;
+    const next = codes.find(code => typeof code.rawValue === 'string' && code.rawValue && !heldCodes.has(code.rawValue));
+    if (next) {
+      showResult(next.rawValue, true, codes);
+    } else if (lastOpenedQR && !showedRepeatLink && codes.some(code => code.rawValue === lastOpenedQR)) {
+      showedRepeatLink = true;
+      displayResult(lastOpenedQR, safeUrl(lastOpenedQR), false);
+      say('Ready for another QR. Move this one out of view to scan it again, or use Open link.');
+    }
   },
   onError(error) {
     stopCamera();
@@ -239,7 +254,13 @@ function rememberOpenedQR(value) {
   showedRepeatLink = false;
   // Tag this scanner entry so Back also works after the browser discards the
   // document. Adding a duplicate entry would require an extra Back to leave.
-  try { history.replaceState({ ...history.state, qrReturnValue: value }, ''); } catch {}
+  try {
+    const state = { ...history.state, qrReturnValue: value };
+    if (scanner.mode !== 'native') state.qrUseFallback = true;
+    if (value && heldCodes.size > 1) state.qrHeldValues = [...heldCodes];
+    else delete state.qrHeldValues;
+    history.replaceState(state, '');
+  } catch {}
 }
 
 function finishNavigation() {
@@ -256,10 +277,16 @@ function recoverLink(value, url) {
   say('Link did not open. Use Open link to retry, or scan another QR.');
 }
 
-function showResult(value, save = true) {
+function showResult(value, save = true, visible = []) {
   const url = safeUrl(value);
   if (save && navigating) return;
   if (save) {
+    // Keep already handled neighbours while both labels are in the frame,
+    // including across Back. A different single label can be acted on at once.
+    for (const held of heldCodes) {
+      if (!visible.some(code => code.rawValue === held)) heldCodes.delete(held);
+    }
+    heldCodes.add(value);
     detectionFeedback();
     const items = getHistory().filter(item => item.value !== value);
     items.unshift({ value, time: Date.now() });
@@ -281,7 +308,7 @@ function showResult(value, save = true) {
     return;
   }
   if (save && lastOpenedQR) rememberOpenedQR('');
-  displayResult(value, url);
+  displayResult(value, url, !save || !scanning);
   say('QR code detected.');
 }
 
@@ -302,6 +329,8 @@ function safeUrl(value) {
 
 function stopCamera() {
   session++;
+  lastBlankFrame = null;
+  blankDuration = 0;
   starting = false;
   readingImage = false;
   scanning = false;
@@ -388,7 +417,7 @@ async function startCamera(force = false) {
     $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
     updateCameraHint(track);
     say('Scanning automatically. Point at a QR code.');
-    scanner.start();
+    scanner.start(heldCodes.size > 0);
     registerUpdates();
     // Tuning runs alongside decoding, never holding up the first scan.
     cameraControls = QRCamera.createController(track, {

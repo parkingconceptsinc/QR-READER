@@ -21,7 +21,7 @@ globalThis.QRScanner = (() => {
     }
     try {
       if (typeof Worker === 'function') {
-        worker = new Worker('./scan-worker.js?v=37');
+        worker = new Worker('./scan-worker.js?v=38');
         worker.onmessage = ({ data }) => {
           const request = pending.get(data.id);
           if (!request) return;
@@ -75,7 +75,7 @@ globalThis.QRScanner = (() => {
         cancelLoad?.();
       },
       get threaded() { return Boolean(worker); },
-      async detect(source, live = false) {
+      async detect(source, live = false, checkInverted = false) {
         if (!context) throw new Error('The built-in QR decoder is unavailable.');
         const width = source.videoWidth || source.width;
         const height = source.videoHeight || source.height;
@@ -91,7 +91,7 @@ globalThis.QRScanner = (() => {
           context.drawImage(source, 0, 0, w, h);
         }
         let pixels = pixelsContext.getImageData(0, 0, w, h);
-        const inversionAttempts = !live || ++frameCount % 5 === 0 ? 'attemptBoth' : 'dontInvert';
+        const inversionAttempts = !live || ++frameCount % 5 === 0 || checkInverted ? 'attemptBoth' : 'dontInvert';
         if (worker) {
           try {
             return await new Promise((resolve, reject) => {
@@ -115,11 +115,20 @@ globalThis.QRScanner = (() => {
     };
   }
 
-  function create({ video, stage, frame, onResult, onError, onStall, onTick = () => {} }) {
+  function create({ video, stage, frame, onResult, onDetections, isHeld = () => false, preferFallback = false,
+    onError, onStall, onTick = () => {} }) {
+    const report = onDetections || (codes => {
+      const code = codes.find(code => typeof code.rawValue === 'string' && code.rawValue.length);
+      if (code) onResult(code.rawValue);
+    });
     let detector;
     let native = false;
+    let secondDecoder = null;
+    let hasDecoded = false;
+    let nextCheckAt = 0;
+    const isNew = code => typeof code.rawValue === 'string' && code.rawValue.length && !isHeld(code.rawValue);
     try {
-      if (!window.BarcodeDetector) throw new Error('Use local decoder');
+      if (preferFallback || !window.BarcodeDetector) throw new Error('Use local decoder');
       detector = new BarcodeDetector({ formats: ['qr_code'] });
       native = true;
     } catch { detector = fallbackDetector(); }
@@ -138,11 +147,14 @@ globalThis.QRScanner = (() => {
     let failed = false;
     let epoch = 0;
     let frameHandle = null;
+    let useVideoFrames = false;
+    let playbackAtLastFrame = 0;
     let job = null;
     let frameTimer = null;
     let lastFrameAt = 0;
     let lastAttempt = -Infinity;
     let lastVideoTime = -1;
+    let lastPresentedFrame;
     let count = 0;
     let averageMs = 0;
     let errors = 0;
@@ -195,19 +207,20 @@ globalThis.QRScanner = (() => {
 
     function cancelFrame() {
       if (frameHandle === null) return;
-      if (video.cancelVideoFrameCallback && video.requestVideoFrameCallback) video.cancelVideoFrameCallback(frameHandle);
+      if (useVideoFrames) video.cancelVideoFrameCallback?.(frameHandle);
       else if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameHandle);
       frameHandle = null;
     }
     function schedule() {
       if (!running || failed || frameHandle !== null || job) return;
       const current = epoch;
+      const videoCallback = useVideoFrames;
       const callback = (timestamp, metadata) => {
-        if (current !== epoch) return;
+        if (current !== epoch || videoCallback !== useVideoFrames) return;
         frameHandle = null;
-        return scan(current, metadata?.mediaTime);
+        return scan(current, metadata);
       };
-      frameHandle = video.requestVideoFrameCallback
+      frameHandle = useVideoFrames
         ? video.requestVideoFrameCallback(callback) : requestAnimationFrame(callback);
     }
     function watchFrames(current) {
@@ -219,21 +232,35 @@ globalThis.QRScanner = (() => {
         // A decoder owns the frame until its own deadline. A silent video
         // source, including one that no longer calls back, needs a new stream.
         const remaining = timeout - (performance.now() - lastFrameAt);
-        if (!job && remaining <= 0) { onStall(); return; }
-        frameTimer = setTimeout(check, job ? timeout : remaining);
+        if (!job && remaining <= 0) {
+          // Some resumed previews keep playing but stop sending video callbacks.
+          if (useVideoFrames && video.readyState >= 2 && Number.isFinite(video.currentTime) &&
+              video.currentTime > playbackAtLastFrame && typeof requestAnimationFrame === 'function') {
+            cancelFrame();
+            useVideoFrames = false;
+            lastVideoTime = -1;
+            lastFrameAt = performance.now();
+            schedule();
+          } else { onStall(); return; }
+        }
+        frameTimer = setTimeout(check, !job && remaining > 0 ? remaining : timeout);
       }
       frameTimer = setTimeout(check, timeout);
+    }
+    function useFallback() {
+      detector = secondDecoder || fallbackDetector();
+      secondDecoder = null;
+      native = false;
+      surfaces.clear();
     }
     function resetFailedDetector() {
       if (!failed) return;
       detector.dispose?.();
-      detector = fallbackDetector();
-      native = false;
-      surfaces.clear();
+      useFallback();
       failed = false;
     }
-    async function decode(source, live) {
-      if (!native) return detector.detect(source, live);
+    async function decode(source, live, wide = false) {
+      if (!native) return detector.detect(source, live, wide);
       let timer;
       try {
         return await Promise.race([
@@ -244,7 +271,7 @@ globalThis.QRScanner = (() => {
         ]);
       } finally { clearTimeout(timer); }
     }
-    async function scan(current, mediaTime) {
+    async function scan(current, metadata) {
       if (!running || current !== epoch || failed) return;
       const now = performance.now();
       onTick(now);
@@ -254,31 +281,49 @@ globalThis.QRScanner = (() => {
       // worker is ready. Slow decoders still apply backpressure through job.
       const interval = native || detector.threaded ? 25 : 90;
       // Frame metadata stays precise when privacy settings round currentTime.
-      const videoTime = Number.isFinite(mediaTime) ? mediaTime : video.currentTime;
-      if (job || video.readyState < 2 || now - lastAttempt < interval ||
-          (Number.isFinite(videoTime) && videoTime === lastVideoTime)) {
+      const videoTime = Number.isFinite(metadata?.mediaTime) ? metadata.mediaTime : video.currentTime;
+      const presented = metadata?.presentedFrames;
+      const sameFrame = Number.isFinite(presented) ? presented === lastPresentedFrame
+        : Number.isFinite(videoTime) && videoTime === lastVideoTime;
+      if (job || video.readyState < 2 || now - lastAttempt < interval || sameFrame) {
         schedule();
         return;
       }
       lastAttempt = now;
       lastFrameAt = now;
       lastVideoTime = videoTime;
+      lastPresentedFrame = presented;
+      playbackAtLastFrame = video.currentTime;
       count++;
       job = (async () => {
         try {
-          const codes = await decode(capture(now), true);
+          const wide = count % 6 === 0;
+          const source = capture(now);
+          let codes = await decode(source, true, wide);
           if (!running || current !== epoch) return;
+          let checkedWide = wide && !native;
+          // Some native scanners keep returning an empty list (or the old
+          // label) on a live stream. Check a wide frame with jsQR on misses.
+          if (native && hasDecoded && wide && now >= nextCheckAt && !codes.some(isNew)) {
+            nextCheckAt = now + 1000;
+            secondDecoder ??= fallbackDetector();
+            let additional = [];
+            try { additional = await secondDecoder.detect(source, true, true); }
+            catch { if (current === epoch) nextCheckAt = performance.now() + 5000; }
+            if (!running || current !== epoch) return;
+            checkedWide = true;
+            if (additional.some(isNew)) useFallback();
+            if (additional.length) codes = codes.concat(additional);
+          }
+          if (codes.length) hasDecoded = true;
           const duration = performance.now() - now;
           averageMs = averageMs ? averageMs * 0.8 + duration * 0.2 : duration;
           errors = 0;
-          const value = codes.find(code => typeof code.rawValue === 'string' && code.rawValue.length)?.rawValue;
-          if (value) onResult(value);
+          report(codes, now, checkedWide);
         } catch (error) {
           if (!running || current !== epoch) return;
           if (native) {
-            detector = fallbackDetector();
-            native = false;
-            surfaces.clear(); // New fallback surfaces favor CPU pixel readback.
+            useFallback();
             errors = 0;
           } else if (++errors >= 3 || error.message?.startsWith('The built-in QR decoder')) {
             failed = true;
@@ -292,15 +337,20 @@ globalThis.QRScanner = (() => {
     }
 
     return {
-      start() {
+      start(resumingAfterScan = false) {
         cancelFrame();
         clearTimeout(frameTimer);
         epoch++;
         running = true;
+        useVideoFrames = typeof video.requestVideoFrameCallback === 'function';
+        playbackAtLastFrame = video.currentTime;
+        hasDecoded ||= resumingAfterScan;
+        nextCheckAt = performance.now() + 800;
         resetFailedDetector();
         errors = count = averageMs = 0;
         lastAttempt = geometryAt = -Infinity;
         lastVideoTime = -1;
+        lastPresentedFrame = undefined;
         invalidate();
         watchFrames(epoch);
         schedule();
@@ -310,6 +360,10 @@ globalThis.QRScanner = (() => {
         epoch++;
         cancelFrame();
         clearTimeout(frameTimer);
+        if (secondDecoder?.busy) {
+          secondDecoder.dispose();
+          secondDecoder = null;
+        }
         if (job && detector.busy) {
           detector.dispose();
           failed = true;
@@ -322,9 +376,7 @@ globalThis.QRScanner = (() => {
         resetFailedDetector();
         job = decode(source, false).catch(error => {
           if (!native || current !== epoch) throw error;
-          detector = fallbackDetector();
-          native = false;
-          surfaces.clear();
+          useFallback();
           return detector.detect(source, false);
         });
         try { return await job; }
