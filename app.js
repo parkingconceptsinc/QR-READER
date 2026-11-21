@@ -15,10 +15,15 @@ let cameraRecoveryAttempts = 0;
 let cameraRecoveryTimer = null;
 let cameraMuteTimer = null;
 let cameraStableTimer = null;
+let cameraRequest = null;
 let session = 0;
 let starting = false;
-let resumeOnVisible = false;
+let readingImage = false;
+let resumeOnVisible = document.hidden;
 let navigating = false;
+let navigationTimer = null;
+let lastOpenedQR = history.state?.qrReturnValue || '';
+let showedRepeatLink = false;
 let manuallyStopped = false;
 let installPrompt = null;
 let lastDecodedValue = '';
@@ -71,7 +76,16 @@ const historyKey = 'lector-qr-history-v1';
 const scanner = QRScanner.create({
   video, stage, frame: $('scanFrame'),
   onTick: now => cameraControls?.tick(now),
+  onStall: () => reconnectCamera(session, 'Camera preview stopped updating.'),
   onResult(value) {
+    if (value === lastOpenedQR) {
+      if (!showedRepeatLink) {
+        showedRepeatLink = true;
+        displayResult(value, safeUrl(value), false);
+        say('Ready for another QR. To revisit this one, use Open link.');
+      }
+      return;
+    }
     const time = Date.now();
     if (value === lastDecodedValue && time - lastDecodedAt < 1200) return;
     lastDecodedValue = value;
@@ -144,10 +158,10 @@ function showCameraFailure(message) {
   $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
 }
 
-function handleUnexpectedCameraLoss(activeSession, message) {
-  if (activeSession !== session || !scanning || manuallyStopped || document.hidden || navigating || cameraRecoveryTimer) return;
+function reconnectCamera(activeSession, message) {
+  if (activeSession !== session || (!scanning && !starting) || manuallyStopped || document.hidden || navigating || cameraRecoveryTimer !== null) return;
   if (cameraRecoveryAttempts >= 2) {
-    showCameraFailure('The camera disconnected repeatedly. Close other apps using the camera, then tap Retry camera.');
+    showCameraFailure('The camera is still unavailable. Close other apps using it, then tap Retry camera.');
     return;
   }
   cameraRecoveryAttempts++;
@@ -155,7 +169,8 @@ function handleUnexpectedCameraLoss(activeSession, message) {
   setVisualState('opening');
   say(message + ' Reconnecting…');
   $('cameraHint').textContent = 'Camera interrupted · Reconnecting automatically';
-  const delay = 300 * cameraRecoveryAttempts;
+  $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Cancel retry';
+  const delay = cameraRecoveryAttempts === 1 ? 500 : 1200;
   cameraRecoveryTimer = setTimeout(() => {
     cameraRecoveryTimer = null;
     if (!document.hidden && !manuallyStopped && !navigating) startCamera();
@@ -165,7 +180,7 @@ function handleUnexpectedCameraLoss(activeSession, message) {
 function monitorCameraTrack(track, activeSession) {
   if (!track?.addEventListener) return;
   track.addEventListener('ended', () => {
-    handleUnexpectedCameraLoss(activeSession, 'Camera disconnected.');
+    reconnectCamera(activeSession, 'Camera disconnected.');
   });
   track.addEventListener('mute', () => {
     if (activeSession !== session || !scanning || manuallyStopped) return;
@@ -173,11 +188,12 @@ function monitorCameraTrack(track, activeSession) {
     cameraMuteTimer = setTimeout(() => {
       cameraMuteTimer = null;
       if (activeSession === session && track.muted) {
-        handleUnexpectedCameraLoss(activeSession, 'Camera signal was interrupted.');
+        reconnectCamera(activeSession, 'Camera signal was interrupted.');
       }
     }, 1400);
   });
   track.addEventListener('unmute', () => {
+    if (activeSession !== session) return;
     clearTimeout(cameraMuteTimer);
     cameraMuteTimer = null;
   });
@@ -200,7 +216,7 @@ function getHistory() {
 function renderHistory() {
   const items = getHistory();
   $('historyList').replaceChildren();
-  $('emptyHistory').hidden = items.length > 0 || !$('historyWrap').hidden;
+  $('emptyHistory').hidden = items.length > 0 || $('historyWrap').hidden;
   $('clearButton').hidden = items.length === 0 || $('historyWrap').hidden;
   $('historyToggle').textContent = $('historyWrap').hidden ? `Show${items.length ? ` (${items.length})` : ''}` : 'Hide';
   $('historyToggle').setAttribute('aria-expanded', String(!$('historyWrap').hidden));
@@ -218,8 +234,31 @@ function renderHistory() {
   }
 }
 
+function rememberOpenedQR(value) {
+  lastOpenedQR = value;
+  showedRepeatLink = false;
+  // Tag this scanner entry so Back also works after the browser discards the
+  // document. Adding a duplicate entry would require an extra Back to leave.
+  try { history.replaceState({ ...history.state, qrReturnValue: value }, ''); } catch {}
+}
+
+function finishNavigation() {
+  clearTimeout(navigationTimer);
+  navigationTimer = null;
+  navigating = false;
+}
+
+function recoverLink(value, url) {
+  finishNavigation();
+  setVisualState('idle');
+  startCamera();
+  displayResult(value, url);
+  say('Link did not open. Use Open link to retry, or scan another QR.');
+}
+
 function showResult(value, save = true) {
   const url = safeUrl(value);
+  if (save && navigating) return;
   if (save) {
     detectionFeedback();
     const items = getHistory().filter(item => item.value !== value);
@@ -229,21 +268,29 @@ function showResult(value, save = true) {
     try { navigator.vibrate?.(25); } catch {}
   }
   if (save && url) {
-    if (navigating) return;
+    rememberOpenedQR(value);
     navigating = true;
-    // Preserve a scanner entry in the browser history before opening the QR URL.
-    // Android Back should return to this exact scanner page and restart its camera.
-    history.pushState({ qrScanner: true }, '', location.href);
     stopCamera();
-    window.location.assign(url);
+    try {
+      window.location.assign(url);
+      // Some browsers silently cancel a handoff. Keep a visible scanner usable.
+      navigationTimer = setTimeout(() => {
+        if (navigating && !document.hidden) recoverLink(value, url);
+      }, 5000);
+    } catch { recoverLink(value, url); }
     return;
   }
+  if (save && lastOpenedQR) rememberOpenedQR('');
+  displayResult(value, url);
+  say('QR code detected.');
+}
+
+function displayResult(value, url, scroll = true) {
   $('resultValue').textContent = value;
   $('result').hidden = false;
   $('openLink').hidden = !url;
   if (url) $('openLink').href = url;
-  say('QR code detected.');
-  $('result').scrollIntoView({ behavior: 'auto', block: 'nearest' });
+  if (scroll) $('result').scrollIntoView({ behavior: 'auto', block: 'nearest' });
 }
 
 function safeUrl(value) {
@@ -256,7 +303,10 @@ function safeUrl(value) {
 function stopCamera() {
   session++;
   starting = false;
+  readingImage = false;
   scanning = false;
+  cameraRequest?.abort();
+  cameraRequest = null;
   scanner.stop();
   cameraControls?.stop();
   cameraControls = null;
@@ -291,22 +341,24 @@ function stopCamera() {
 async function startCamera(force = false) {
   if (force) {
     manuallyStopped = false;
+    cameraRecoveryAttempts = 0;
   }
-  if (manuallyStopped || starting || scanning || document.hidden || navigating) return;
+  if (manuallyStopped || starting || scanning || document.hidden || navigating || cameraRecoveryTimer !== null) return;
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     return showCameraFailure('Camera access requires a secure HTTPS page. Open the QR Reader website in Chrome or Edge.');
   }
   stopCamera();
   const activeSession = session;
+  const request = new AbortController();
+  cameraRequest = request;
   starting = true;
   setVisualState('opening');
-  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Opening camera…';
-  $('cameraButton').disabled = true;
+  $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Cancel camera request';
   say('Requesting camera access…');
   try {
     const { stream: openedStream, devices } = await QRCamera.open({
       mediaDevices: navigator.mediaDevices, facingMode: 'environment', deviceId: selectedCameraId,
-      isCurrent: () => activeSession === session
+      signal: request.signal
     });
     if (activeSession !== session) { openedStream.getTracks().forEach(track => track.stop()); return; }
     stream = openedStream;
@@ -316,8 +368,9 @@ async function startCamera(force = false) {
     video.setAttribute('muted', '');
     video.setAttribute('playsinline', '');
     video.srcObject = stream;
-    await video.play();
+    await QRCamera.play(video, request.signal);
     if (activeSession !== session) return;
+    cameraRequest = null;
     starting = false;
     scanning = true;
     cameraRecoveryTimer = null;
@@ -345,18 +398,20 @@ async function startCamera(force = false) {
     cameraControls.ready.catch(() => {});
   } catch (error) {
     if (activeSession !== session) return;
+    registerUpdates();
+    if (error.name === 'NotReadableError' || error.name === 'AbortError') {
+      reconnectCamera(activeSession, 'Camera is temporarily busy.');
+      return;
+    }
     stopCamera();
     setVisualState('error');
-    registerUpdates();
     const message = error.name === 'NotAllowedError' || error.name === 'SecurityError'
       ? 'Camera permission is blocked. In Chrome, open the site controls beside the address bar → Site settings → Camera → Allow. In Windows, enable Settings → Privacy & security → Camera. Then reload and tap Retry camera.'
       : error.name === 'NotFoundError'
         ? 'No usable rear camera was found. The front camera is not used for scanning.'
-        : error.name === 'NotReadableError'
-          ? 'The camera is busy. Close other apps using it, then tap Start scanning.'
-          : error.name === 'OverconstrainedError'
-            ? 'The selected camera is not available. Tap Start scanning to retry.'
-            : error.message || 'Camera could not start. Check permission and try Start scanning again.';
+        : error.name === 'OverconstrainedError'
+          ? 'The selected camera is not available. Tap Retry camera.'
+          : error.message || 'Camera could not start. Tap Retry camera.';
     say(message, true);
     $('cameraHint').textContent = message;
     $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
@@ -375,11 +430,13 @@ async function readFile(file) {
   if (!file) return;
   stopCamera();
   const fileSession = session;
+  readingImage = true;
   setVisualState('reading');
   say('Reading the image…');
   try {
     const bitmap = await createImageBitmap(file);
     try {
+      if (fileSession !== session) return;
       const codes = await scanner.read(bitmap);
       if (fileSession !== session) return;
       if (codes.length) {
@@ -395,16 +452,22 @@ async function readFile(file) {
     say('Could not read the image. Choose a valid image file.', true);
     scheduleCameraRestart(350);
   } finally {
-    if (fileSession === session && !navigating) setVisualState('idle');
+    if (fileSession === session) {
+      readingImage = false;
+      if (!navigating) setVisualState('idle');
+    }
   }
 }
 
 $('cameraButton').addEventListener('click', () => {
-  if (scanning) {
+  if (starting || scanning || cameraRecoveryTimer !== null) {
     manuallyStopped = true;
     stopCamera();
     say('Camera stopped.');
-  } else startCamera(true);
+  } else {
+    finishNavigation();
+    startCamera(true);
+  }
 });
 $('focusButton').addEventListener('click', () => {
   if (!cameraControls) return;
@@ -444,7 +507,8 @@ $('historyToggle').addEventListener('click', () => {
   renderHistory();
 });
 $('clearButton').addEventListener('click', () => {
-  localStorage.removeItem(historyKey);
+  try { localStorage.removeItem(historyKey); }
+  catch { say('Could not clear the saved history.', true); return; }
   renderHistory();
   say('History cleared.');
 });
@@ -460,34 +524,36 @@ $('install').addEventListener('click', async () => {
   installPrompt = null;
   $('install').hidden = true;
 });
+function suspendScanner() {
+  resumeOnVisible ||= !manuallyStopped && (scanning || starting || navigating || readingImage ||
+    cameraRecoveryTimer !== null || restartTimer !== null);
+  clearTimeout(navigationTimer);
+  navigationTimer = null;
+  stopCamera();
+}
+
+function restoreScanner() {
+  if (navigating) $('result').hidden = true;
+  finishNavigation();
+  selectedCameraId = '';
+  resumeOnVisible = document.hidden && !manuallyStopped;
+  if (document.hidden) return;
+  renderHistory();
+  if (!manuallyStopped) startCamera();
+}
+
 document.addEventListener('visibilitychange', () => {
   stage.classList.toggle('effects-paused', document.hidden);
-  if (document.hidden) {
-    // A QR link may hand off to another app; preserve the intent to resume on return.
-    resumeOnVisible = !manuallyStopped && (scanning || starting || navigating);
-    stopCamera();
-  } else if (resumeOnVisible && !manuallyStopped) {
-    resumeOnVisible = false;
-    navigating = false;
-    selectedCameraId = '';
-    renderHistory();
-    startCamera();
-  }
+  if (document.hidden) suspendScanner();
+  else if (resumeOnVisible || navigating) restoreScanner();
 });
 window.addEventListener('popstate', event => {
-  if (event.state?.qrScanner || navigating) {
-    navigating = false;
-    resumeOnVisible = false;
-    $('result').hidden = true;
-    say('Ready for the next scan.');
-    if (!manuallyStopped) startCamera();
-  }
+  if (event.state?.qrReturnValue || event.state?.qrScanner || navigating || resumeOnVisible) restoreScanner();
 });
-window.addEventListener('pagehide', stopCamera);
-window.addEventListener('pageshow', () => {
-  navigating = false;
-  selectedCameraId = '';
-  if (!document.hidden && !manuallyStopped) { renderHistory(); startCamera(); }
+window.addEventListener('pagehide', suspendScanner);
+window.addEventListener('pageshow', event => {
+  if (event?.persisted || resumeOnVisible || navigating) restoreScanner();
+  else renderHistory();
 });
 
 // Ask for the camera before rendering optional history or checking for updates.

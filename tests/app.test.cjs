@@ -17,12 +17,15 @@ function element(id) {
   };
 }
 
-async function app({ native = true, workerFails = false, workerHangs = false, denied = false } = {}) {
+async function app({ native = true, workerFails = false, workerHangs = false, denied = false,
+  historyState = null, setup, scriptLoader } = {}) {
   const elements = new Map();
   const storage = new Map([['pci-qr-camera-v1', 'front']]);
   const frames = [];
   const timers = new Map();
   const windowEvents = {};
+  const documentEvents = {};
+  const visits = [];
   const tracks = [];
   let timerId = 0;
   let time = 1000;
@@ -37,7 +40,7 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
   ];
   function get(id) { if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); }
   const video = get('video');
-  video.videoWidth = 3840; video.videoHeight = 2160; video.readyState = 4;
+  video.videoWidth = 3840; video.videoHeight = 2160; video.readyState = 4; video.currentTime = 0;
   video.play = async () => {};
   video.requestVideoFrameCallback = callback => { frames.push(callback); return callback; };
   video.cancelVideoFrameCallback = callback => { const i = frames.indexOf(callback); if (i >= 0) frames.splice(i, 1); };
@@ -48,9 +51,13 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
   const mainDecoder = () => { mainDecodeCount++; return nextCodes.length ? { data: nextCodes[0].rawValue } : null; };
   const document = { hidden: false, getElementById: get,
     createElement: tag => tag === 'canvas' ? canvas() : element(tag),
-    addEventListener() {}, head: { append(script) { context.jsQR = mainDecoder; queueMicrotask(script.onload); } }
+    addEventListener(type, callback) { documentEvents[type] = callback; },
+    head: { append(script) {
+      if (scriptLoader) return scriptLoader(script, context, mainDecoder);
+      context.jsQR = mainDecoder; queueMicrotask(script.onload);
+    } }
   };
-  const context = vm.createContext({ document, DOMException, URL, console,
+  const context = vm.createContext({ document, DOMException, AbortController, URL, console,
     createImageBitmap: async () => ({ width: 200, height: 200, close() {} }),
     navigator: { mediaDevices: {
       getSupportedConstraints: () => ({ pointsOfInterest: true }),
@@ -60,12 +67,14 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
         const id = constraints.video?.deviceId?.exact || 'main';
         const settings = { deviceId: id, facingMode: id === 'front' ? 'user' : 'environment',
           width: 3840, height: 2160, zoom: 1 };
+        const events = {};
         const track = { label: devices.find(device => device.deviceId === id).label, readyState: 'live',
           getSettings: () => settings, getConstraints: () => constraints.video,
           getCapabilities: () => ({ focusMode: ['continuous'], exposureMode: ['continuous'],
             whiteBalanceMode: ['continuous'], width: { max: 3840 }, height: { max: 2160 }, zoom: { min: 1, max: 8, step: 0.1 } }),
           applyConstraints: async constraints => { Object.assign(settings, ...(constraints.advanced || [])); },
-          stop() { this.readyState = 'ended'; }, addEventListener() {}
+          stop() { this.readyState = 'ended'; },
+          addEventListener(type, callback) { events[type] = callback; }, fire(type) { events[type]?.(); }
         };
         tracks.push(track);
         return { getTracks: () => [track], getVideoTracks: () => [track] };
@@ -74,9 +83,10 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
     localStorage: { getItem: key => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     sessionStorage: { getItem: () => null, setItem() {} },
-    history: { pushState() {} }, location: { href: 'https://example.test/QR-READER/',
-      assign(url) { this.href = url; }, reload() {} },
-    performance: { now: () => time += 100 }, Date,
+    history: { state: historyState, replaceState(state) { this.state = state; } },
+    location: { href: 'https://example.test/QR-READER/',
+      assign(url) { visits.push(url); this.href = url; }, reload() {} },
+    performance: { now: () => time }, Date: class extends Date { static now() { return time; } },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame: callback => frames.push(callback),
@@ -93,12 +103,23 @@ async function app({ native = true, workerFails = false, workerHangs = false, de
     }
   });
   context.window = context;
+  setup?.(context);
   if (native) context.BarcodeDetector = class { async detect() { return nextCodes; } };
   for (const file of ['camera.js', 'scanner.js', 'app.js']) vm.runInContext(readFileSync(require.resolve('../' + file), 'utf8'), context);
   await flush(); await flush();
-  return { get, context, tracks, storage, windowEvents,
+  return { get, context, tracks, storage, windowEvents, visits,
+    visibility(hidden) { document.hidden = hidden; documentEvents.visibilitychange(); },
+    advance(ms) { time += ms; },
+    get frameCount() { return frames.length; },
+    hasTimer(delay) { return [...timers.values()].some(timer => timer.delay === delay); },
     codes(value) { nextCodes = value ? [{ rawValue: value }] : []; },
-    async frame() { const callback = frames.shift(); assert.ok(callback, 'a scan frame must be scheduled'); await callback(); await flush(); },
+    async frame(mediaTime) {
+      time += 100;
+      video.currentTime = mediaTime ?? time / 1000;
+      const callback = frames.shift();
+      assert.ok(callback, 'a scan frame must be scheduled');
+      await callback(time, { mediaTime: video.currentTime }); await flush();
+    },
     runTimer(delay) {
       const entry = [...timers].find(([, value]) => value.delay === delay);
       assert.ok(entry, `timer ${delay} must exist`); timers.delete(entry[0]); entry[1].callback();
@@ -228,3 +249,259 @@ test('reduced motion skips the reticle animation while tap focus still reaches t
 });
 
 
+const scannerURL = 'https://example.test/QR-READER/';
+const firstLink = 'https://example.com/first';
+const nextLink = 'https://example.com/next';
+
+for (const native of [true, false]) test(`Back keeps the same ${native ? 'native' : 'worker'} QR in view and opens a different link immediately`, async () => {
+  const h = await app({ native, historyState: { other: 'keep' } });
+  h.codes(firstLink); await h.frame();
+  h.visibility(true); h.windowEvents.pagehide(); h.advance(30000);
+  h.context.location.href = scannerURL;
+  h.windowEvents.pageshow({ persisted: true });
+  h.windowEvents.popstate({ state: h.context.history.state });
+  h.visibility(false); await flush();
+  const camera = h.tracks.at(-1);
+  assert.equal(h.tracks.length, 2);
+  assert.equal(h.context.history.state.other, 'keep');
+  for (let i = 0; i < 15; i++) await h.frame();
+  h.codes(null); await h.frame(); h.advance(60000);
+  h.codes(firstLink); await h.frame();
+  assert.deepEqual(h.visits, [firstLink]);
+  assert.equal(h.get('openLink').href, firstLink);
+  assert.equal(camera.readyState, 'live');
+  h.codes(nextLink); await h.frame();
+  assert.deepEqual(h.visits, [firstLink, nextLink]);
+  assert.equal(camera.readyState, 'ended');
+});
+
+test('Back into a rebuilt document remembers only the QR opened from that history entry', async () => {
+  const before = await app();
+  before.codes(firstLink); await before.frame();
+  const restored = await app({ historyState: structuredClone(before.context.history.state) });
+  restored.codes(firstLink); await restored.frame();
+  assert.deepEqual(restored.visits, []);
+  assert.equal(restored.get('openLink').hidden, false);
+  restored.codes('TEXT'); await restored.frame();
+  assert.equal(restored.get('resultValue').textContent, 'TEXT');
+  assert.equal(restored.context.history.state.qrReturnValue, '');
+  restored.codes(firstLink); await restored.frame();
+  assert.deepEqual(restored.visits, [firstLink]);
+  const fresh = await app();
+  fresh.codes(firstLink); await fresh.frame();
+  assert.deepEqual(fresh.visits, [firstLink]);
+});
+
+test('a manually stopped camera stays stopped through hidden and visible history restores', async () => {
+  const h = await app({ historyState: { qrReturnValue: firstLink } });
+  h.get('cameraButton').fire('click');
+  h.windowEvents.pagehide(); h.visibility(true);
+  h.windowEvents.pageshow({ persisted: true });
+  h.windowEvents.popstate({ state: h.context.history.state });
+  h.visibility(false); await flush();
+  assert.equal(h.tracks.length, 1);
+  assert.equal(h.tracks[0].readyState, 'ended');
+});
+
+test('a failed history update still opens the link and protects a live document on return', async () => {
+  const h = await app({ setup(c) {
+    c.history.replaceState = () => { throw new DOMException('History unavailable', 'SecurityError'); };
+  } });
+  h.codes(firstLink); await h.frame();
+  h.visibility(true); h.context.location.href = scannerURL; h.visibility(false); await flush();
+  h.advance(9000); await h.frame();
+  assert.deepEqual(h.visits, [firstLink]);
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+});
+
+for (const silent of [false, true]) test(`a ${silent ? 'silently cancelled' : 'rejected'} navigation leaves a manual link and a working scanner`, async () => {
+  const h = await app();
+  const assign = h.context.location.assign;
+  h.context.location.assign = () => { if (!silent) throw new DOMException('Blocked', 'SecurityError'); };
+  h.codes(firstLink); await h.frame();
+  if (silent) h.runTimer(5000);
+  await flush();
+  assert.equal(h.get('stage')['data-state'], 'scanning');
+  assert.equal(h.get('openLink').hidden, false);
+  assert.equal(h.get('openLink').href, firstLink);
+  await h.frame(); assert.deepEqual(h.visits, []);
+  h.context.location.assign = assign;
+  h.codes(nextLink); await h.frame();
+  assert.deepEqual(h.visits, [nextLink]);
+});
+
+test('a stalled enumeration falls back to the browser rear camera and starts the scanner', async () => {
+  const h = await app({ setup(c) {
+    c.navigator.mediaDevices.enumerateDevices = () => new Promise(() => {});
+  } });
+  h.runTimer(1200); await flush();
+  assert.equal(h.tracks.length, 1);
+  h.runTimer(1200); await flush();
+  assert.equal(h.get('stage')['data-state'], 'scanning');
+  assert.equal(h.tracks[0].getSettings().facingMode, 'environment');
+  assert.equal(h.frameCount, 1);
+});
+
+for (const manuallyCancel of [true, false]) test(`a ${manuallyCancel ? 'cancelled' : 'timed out'} camera request releases a late stream without disturbing the retry`, async () => {
+  let deliver;
+  const h = await app({ setup(c) {
+    const devices = c.navigator.mediaDevices;
+    const acquire = devices.getUserMedia;
+    devices.getUserMedia = constraints => {
+      devices.getUserMedia = acquire;
+      return new Promise(resolve => { deliver = () => resolve(acquire(constraints)); });
+    };
+  } });
+  assert.equal(h.get('cameraButton').disabled, false);
+  if (manuallyCancel) h.get('cameraButton').fire('click');
+  else h.runTimer(20000);
+  await flush();
+  assert.equal(h.get('stage')['data-state'], manuallyCancel ? 'idle' : 'error');
+  h.get('cameraButton').fire('click'); await flush();
+  const active = h.tracks[0];
+  deliver(); await flush();
+  assert.equal(h.tracks.at(-1).readyState, 'ended');
+  assert.equal(active.readyState, 'live');
+  assert.equal(h.get('video').srcObject.getVideoTracks()[0], active);
+  assert.equal(h.frameCount, 1);
+});
+
+test('a stuck video play releases the camera, then a retry can scan even if old play resolves later', async () => {
+  let finish;
+  const h = await app({ setup(c) {
+    const video = c.document.getElementById('video');
+    video.play = () => {
+      video.play = async () => {};
+      return new Promise(resolve => { finish = resolve; });
+    };
+  } });
+  assert.equal(h.tracks[0].readyState, 'live');
+  h.runTimer(6000); await flush();
+  assert.equal(h.tracks[0].readyState, 'ended');
+  assert.equal(h.get('video').srcObject, null);
+  assert.equal(h.get('stage')['data-state'], 'error');
+  h.get('cameraButton').fire('click'); await flush();
+  finish(); await flush();
+  h.codes('RECOVERED'); await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'RECOVERED');
+  assert.equal(h.tracks.filter(track => track.readyState === 'live').length, 1);
+});
+
+test('a briefly busy camera on Back retries after a delay and scans without a tap', async () => {
+  const h = await app();
+  h.codes(firstLink); await h.frame(); h.windowEvents.pagehide();
+  const devices = h.context.navigator.mediaDevices;
+  const acquire = devices.getUserMedia;
+  devices.getUserMedia = async () => { throw new DOMException('Busy', 'NotReadableError'); };
+  h.context.location.href = scannerURL;
+  h.windowEvents.pageshow({ persisted: true }); await flush();
+  assert.equal(h.tracks.length, 1);
+  assert.equal(h.get('stage')['data-state'], 'opening');
+  devices.getUserMedia = acquire;
+  h.runTimer(500); await flush();
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+  h.codes(nextLink); await h.frame();
+  assert.deepEqual(h.visits, [firstLink, nextLink]);
+});
+
+test('persistent camera loss stops after two delayed retries and manual retry resets the budget', async () => {
+  const h = await app();
+  const devices = h.context.navigator.mediaDevices;
+  const acquire = devices.getUserMedia;
+  devices.getUserMedia = async () => { throw new DOMException('Busy', 'NotReadableError'); };
+  h.tracks[0].fire('ended');
+  h.runTimer(500); await flush();
+  h.runTimer(1200); await flush();
+  assert.equal(h.get('stage')['data-state'], 'error');
+  assert.equal(h.hasTimer(500) || h.hasTimer(1200), false);
+  devices.getUserMedia = acquire;
+  h.get('cameraButton').fire('click'); await flush();
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+  h.tracks.at(-1).fire('ended');
+  assert.equal(h.hasTimer(500), true);
+  h.get('cameraButton').fire('click');
+  assert.equal(h.hasTimer(500), false);
+});
+
+for (const frozen of [false, true]) test(`a preview with ${frozen ? 'repeated timestamps' : 'no callbacks'} reconnects, and pausing cancels frame monitoring`, async () => {
+  const h = await app();
+  if (frozen) { await h.frame(1); await h.frame(1); }
+  h.advance(4100); h.runTimer(4000);
+  assert.equal(h.tracks[0].readyState, 'ended');
+  h.runTimer(500); await flush();
+  const recovered = h.tracks.at(-1);
+  assert.equal(recovered.readyState, 'live');
+  h.codes('RECOVERED'); await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'RECOVERED');
+  h.visibility(true);
+  assert.equal(h.hasTimer(4000), false);
+  assert.equal(recovered.readyState, 'ended');
+});
+
+for (const stopEarly of [true, false]) test(`a stalled fallback script is recoverable ${stopEarly ? 'immediately after manual stop' : 'after its deadline'}`, async () => {
+  let loads = 0;
+  let firstScript;
+  const h = await app({ native: false, workerFails: true, scriptLoader(script, context, decoder) {
+    if (++loads === 1) { firstScript = script; return; }
+    context.jsQR = decoder;
+    queueMicrotask(script.onload);
+  } });
+  h.codes('OLD'); const pending = h.frame(); await flush();
+  assert.equal(h.hasTimer(4500), true);
+  if (stopEarly) h.get('cameraButton').fire('click');
+  else h.runTimer(4500);
+  await pending;
+  assert.equal(h.get('stage')['data-state'], stopEarly ? 'idle' : 'error');
+  assert.equal(h.hasTimer(4500), false);
+  assert.equal(firstScript.onload, null);
+  assert.equal(h.get('resultValue').textContent, '');
+  h.get('cameraButton').fire('click'); await flush();
+  h.codes('NEW'); await h.frame();
+  assert.equal(h.get('resultValue').textContent, 'NEW');
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+});
+
+test('empty history is visible only inside its expanded state, including after clearing saved scans', async () => {
+  const h = await app();
+  h.windowEvents.pageshow({ persisted: false });
+  assert.equal(h.get('emptyHistory').hidden, true);
+  h.get('historyToggle').fire('click');
+  assert.equal(h.get('emptyHistory').hidden, false);
+  h.codes('SAVED'); await h.frame();
+  assert.equal(h.get('emptyHistory').hidden, true);
+  assert.equal(h.get('clearButton').hidden, false);
+  h.get('clearButton').fire('click');
+  assert.equal(h.get('emptyHistory').hidden, false);
+  assert.equal(h.get('clearButton').hidden, true);
+  h.get('historyToggle').fire('click');
+  assert.equal(h.get('emptyHistory').hidden, true);
+});
+test('a backgrounded image read cannot open a stale URL on return', async () => {
+  const h = await app();
+  let finish;
+  let closed = false;
+  h.context.createImageBitmap = () => new Promise(resolve => {
+    finish = () => resolve({ width: 200, height: 200, close() { closed = true; } });
+  });
+  h.get('fileInput').files = [{}]; h.get('fileInput').fire('change');
+  assert.equal(h.get('stage')['data-state'], 'reading');
+  h.visibility(true); h.visibility(false); await flush();
+  h.codes(firstLink); finish(); await flush();
+  assert.equal(closed, true);
+  assert.deepEqual(h.visits, []);
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+  h.codes(nextLink); await h.frame();
+  assert.deepEqual(h.visits, [nextLink]);
+});
+
+test('old track events cannot cancel recovery for a newly muted camera', async () => {
+  const h = await app();
+  const old = h.tracks[0];
+  h.visibility(true); h.visibility(false); await flush();
+  const current = h.tracks.at(-1);
+  current.muted = true; current.fire('mute'); old.fire('unmute');
+  h.runTimer(1400); await flush();
+  assert.equal(current.readyState, 'ended');
+  h.runTimer(500); await flush();
+  assert.equal(h.tracks.at(-1).readyState, 'live');
+});
