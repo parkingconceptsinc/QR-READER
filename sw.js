@@ -1,57 +1,67 @@
-const CACHE = 'lector-qr-v36';
-const ASSETS = ['./', './index.html', './styles.css?v=36', './app.js?v=36', './camera.js?v=36', './scanner.js?v=36', './scan-worker.js?v=36', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest?v=36', './icons/pci-qr-48-v7.png', './icons/pci-qr-96-v7.png', './icons/pci-qr-192-v7.png', './icons/pci-qr-512-v7.png', './icons/pci-qr-180-v7.png', './icons/pci-qr-maskable-v7.png'];
+const CACHE = 'lector-qr-v37';
+const ASSETS = ['./', './index.html', './styles.css?v=37', './app.js?v=37', './camera.js?v=37', './scanner.js?v=37', './scan-worker.js?v=37', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest?v=37', './icons/pci-qr-48-v7.png', './icons/pci-qr-96-v7.png', './icons/pci-qr-192-v7.png', './icons/pci-qr-512-v7.png', './icons/pci-qr-180-v7.png', './icons/pci-qr-maskable-v7.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
-  event.waitUntil(Promise.all([caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('lector-qr-') && key !== CACHE).map(key => caches.delete(key)))), self.clients.claim()]));
+  const cleanup = async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(key => key.startsWith('lector-qr-') && key !== CACHE).map(key => caches.delete(key)));
+  };
+  event.waitUntil(Promise.all([cleanup().catch(() => {}), self.clients.claim()]));
 });
+
+async function openCache() {
+  try { return await caches.open(CACHE); } catch { return null; }
+}
+
+async function readCached(cacheReady, request, fallback) {
+  const cache = await cacheReady;
+  if (!cache) return;
+  try {
+    const hit = await cache.match(request);
+    return hit || (fallback && await cache.match(fallback));
+  } catch { return undefined; }
+}
+
 self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET') return;
-  if (new URL(event.request.url).origin !== self.location.origin) return;
+  const { request } = event;
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
   // Installed launches never wait for a slow network. Refresh the shell in
   // the background; explicit versioned dependencies prevent mixed script loads.
-  if (event.request.mode === 'navigate') {
-    const cacheReady = caches.open(CACHE);
-    const fresh = fetch(event.request, { cache: 'no-store' }).then(async response => {
-      if (!response.ok) throw new Error('Navigation request failed.');
-      const html = await response.clone().text();
+  if (request.mode === 'navigate') {
+    const index = new URL('./index.html', self.registration.scope).href;
+    const root = new URL('./', self.registration.scope).href;
+    // A QR may link to another document in this same scope. Only the two
+    // scanner entry points should ever be answered with the offline shell.
+    const documentPath = url.origin + url.pathname;
+    if (documentPath !== root && documentPath !== index) return;
+    const cacheReady = openCache();
+    const fresh = fetch(request, { cache: 'no-store' });
+    event.waitUntil(fresh.then(async response => {
+      if (!response.ok) return;
+      const copy = response.clone();
+      const cache = await cacheReady;
+      if (!cache) return;
+      const html = await copy.clone().text();
       // A newer document must be installed with its own offline dependencies.
       // Keep this version usable if connectivity drops during an update.
-      if (!html.includes('./app.js?v=36') || !html.includes('./scanner.js?v=36')) return response;
-      const cache = await cacheReady;
+      if (!html.includes('./app.js?v=37') || !html.includes('./scanner.js?v=37')) return;
       await Promise.all([
-        cache.put(event.request, response.clone()),
-        cache.put(new URL('./index.html', self.registration.scope).href, response.clone()),
-        cache.put(new URL('./', self.registration.scope).href, response.clone())
+        cache.put(request, copy.clone()), cache.put(index, copy.clone()),
+        cache.put(root, copy)
       ]);
-      return response;
-    });
-    event.waitUntil(fresh.catch(() => {}));
-    event.respondWith((async () => {
-      const cache = await cacheReady;
-      const cached = (await cache.match(event.request)) ||
-        (await cache.match(new URL('./index.html', self.registration.scope).href));
-      if (cached) return cached;
-      return fresh.catch(() => Response.error());
-    })());
+    }).catch(() => {}));
+    event.respondWith(readCached(cacheReady, request, index).then(hit => hit || fresh).catch(() => Response.error()));
     return;
   }
 
   // Match versioned scripts exactly. Substituting a different app version can
   // combine an old document with new dependencies during a worker update.
-  if (/\/(app|camera|scanner|scan-worker)\.js$/.test(new URL(event.request.url).pathname)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE);
-      const cached = await cache.match(event.request);
-      if (cached) return cached;
-      return fetch(event.request, { cache: 'no-cache' });
-    })());
-    return;
-  }
-
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
+  const script = /\/(app|camera|scanner|scan-worker)\.js$/.test(url.pathname);
+  event.respondWith(readCached(openCache(), request).then(hit => hit || fetch(request, script ? { cache: 'no-cache' } : undefined)));
 });
 
 

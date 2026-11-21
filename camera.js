@@ -39,9 +39,38 @@ globalThis.QRCamera = (() => {
     return ranked[0]?.score > 0 ? ranked[0].device : null;
   }
 
-  async function list(mediaDevices) {
-    try { return (await mediaDevices.enumerateDevices()).filter(device => device.kind === 'videoinput'); }
-    catch { return []; }
+  // Browser permission and driver requests cannot always be cancelled. Stop any
+  // stream delivered after its caller has cancelled or the deadline has passed.
+  function cameraStep(promise, signal, timeout, releaseLate) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      function finish(callback, value) {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
+        callback(value);
+        return true;
+      }
+      const cancel = () => finish(reject, new DOMException('Camera request cancelled.', 'AbortError'));
+      const timer = setTimeout(() => finish(reject,
+        new DOMException('Camera did not respond. Tap Retry camera.', 'TimeoutError')), timeout);
+      if (signal?.aborted) cancel();
+      else signal?.addEventListener('abort', cancel, { once: true });
+      Promise.resolve(promise).then(value => {
+        if (!finish(resolve, value)) releaseLate?.(value);
+      }, error => finish(reject, error));
+    });
+  }
+
+  async function list(mediaDevices, signal) {
+    try {
+      const devices = await cameraStep(mediaDevices.enumerateDevices(), signal, 1200);
+      return devices.filter(device => device.kind === 'videoinput');
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return [];
+    }
   }
 
   function close(stream) {
@@ -50,12 +79,11 @@ globalThis.QRCamera = (() => {
 
   const deviceCache = new WeakMap();
 
-  async function open({ mediaDevices, facingMode, deviceId = '', isCurrent = () => true }) {
+  async function open({ mediaDevices, facingMode, deviceId = '', signal, isCurrent = () => true }) {
     let opened = null;
     const attemptedRearIds = new Set();
     const check = () => {
-      if (isCurrent()) return;
-      close(opened);
+      if (isCurrent() && !signal?.aborted) return;
       throw new DOMException('Camera request cancelled.', 'AbortError');
     };
     async function acquire(id = '') {
@@ -73,7 +101,8 @@ globalThis.QRCamera = (() => {
       for (let index = 0; index < profiles.length; index++) {
         check();
         try {
-          opened = await mediaDevices.getUserMedia({ audio: false, video: profiles[index] });
+          opened = await cameraStep(mediaDevices.getUserMedia({ audio: false, video: profiles[index] }),
+            signal, 20000, close);
           check();
           const track = opened.getVideoTracks()[0];
           const settings = track?.getSettings?.() || {};
@@ -82,7 +111,7 @@ globalThis.QRCamera = (() => {
             opened = null;
             // Some browsers reveal lens IDs only after granting the first request
             // and may ignore facingMode. Recover by explicit rear ID before failing.
-            const exposed = await list(mediaDevices);
+            const exposed = await list(mediaDevices, signal);
             check();
             const alternative = choose(exposed.filter(device => !attemptedRearIds.has(device.deviceId)), facingMode);
             if (alternative && !isFront(alternative)) return acquire(alternative.deviceId);
@@ -99,7 +128,8 @@ globalThis.QRCamera = (() => {
     try {
       let cached = deviceCache.get(mediaDevices);
       if (!cached) {
-        cached = { devices: await list(mediaDevices) };
+        cached = { devices: await list(mediaDevices, signal) };
+        check();
         deviceCache.set(mediaDevices, cached);
         mediaDevices.addEventListener?.('devicechange', () => deviceCache.delete(mediaDevices), { once: true });
       }
@@ -116,7 +146,8 @@ globalThis.QRCamera = (() => {
       // Permission-unlocked/changed identities still get a full ranking pass.
       const actualId = opened.getVideoTracks()[0]?.getSettings?.().deviceId;
       if (!preferred || actualId !== preferred || !devices.some(device => device.deviceId === actualId && device.label)) {
-        devices = await list(mediaDevices);
+        devices = await list(mediaDevices, signal);
+        check();
         deviceCache.set(mediaDevices, { devices });
       }
       check();
@@ -136,7 +167,7 @@ globalThis.QRCamera = (() => {
       check();
       return { stream: opened, devices };
     } catch (error) {
-      deviceCache.delete(mediaDevices);
+      if (isCurrent() && !signal?.aborted) deviceCache.delete(mediaDevices);
       close(opened);
       throw error;
     }
@@ -304,6 +335,10 @@ globalThis.QRCamera = (() => {
     await createController(track, { isCurrent }).ready;
   }
 
-  return Object.freeze({ score, choose, open, tune, isFront, zoomValue, autoZoom, createController });
+  function play(video, signal) {
+    return cameraStep(video.play(), signal, 6000);
+  }
+
+  return Object.freeze({ score, choose, open, play, tune, isFront, zoomValue, autoZoom, createController });
 })();
 

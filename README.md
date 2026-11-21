@@ -14,6 +14,12 @@ A speed-first, installable QR scanner. The rear camera starts when the page open
 
 There is no build step, remote decoder, framework, external font, or CDN dependency.
 
+## v37 camera and Back recovery
+
+New QR links still open automatically. When Back returns to the scanner, the last opened QR stays available through **Open link**. A different code scans immediately. The scanner records the last link on its existing history entry so this also works when the browser rebuilds the page. Chrome may skip a page that opened a link before the user interacted with it. [Chromium history behavior](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/history_manipulation_intervention.md)
+
+Camera requests can be cancelled. Device enumeration, acquisition, video playback and decoder loading have deadlines. The scanner reconnects after a frozen preview or a temporarily busy camera, with up to two delayed retries. A failed link handoff leaves a manual link available. The offline worker can serve a network response when cache access fails.
+
 ## v36: faster frame processing and Android icon
 
 The threaded decoder can process each fresh 30 fps frame when it is ready, instead of skipping alternate frames behind a 40 ms minimum. Decoding stays sequential, so slower devices never accumulate a frame queue. Precise video-frame timestamps prevent rounded playback time from suppressing fresh frames.

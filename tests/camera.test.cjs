@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
-const context = vm.createContext({ DOMException });
+const context = vm.createContext({ DOMException, setTimeout, clearTimeout });
 vm.runInContext(readFileSync(require.resolve('../camera.js'), 'utf8'), context);
 const camera = context.QRCamera;
 const device = (deviceId, label) => ({ kind: 'videoinput', deviceId, label });

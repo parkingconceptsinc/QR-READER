@@ -9,6 +9,7 @@ const scope = 'https://example.test/QR-READER/';
 async function installedCache({ network = async () => { throw new Error('Network offline'); } } = {}) {
   const events = {};
   const entries = new Map();
+  const background = [];
   const cacheKeys = ['unrelated-app', 'lector-qr-old'];
   const url = request => new URL(request.url || request, scope).href;
   const cache = {
@@ -34,12 +35,13 @@ async function installedCache({ network = async () => { throw new Error('Network
   for (const type of ['install', 'activate']) {
     let pending; events[type]({ waitUntil(value) { pending = value; } }); await pending;
   }
-  return { cacheKeys,
+  return { cacheKeys, cache, caches: context.caches, entries, background,
     async fetch(path, mode = 'cors') {
       let response;
-      events.fetch({ request: { url: url(path), method: 'GET', mode },
-        respondWith(value) { response = value; }, waitUntil() {} });
-      return response;
+      const request = { url: url(path), method: 'GET', mode };
+      events.fetch({ request,
+        respondWith(value) { response = value; }, waitUntil(value) { background.push(value); } });
+      return response ?? network(request);
     }
   };
 }
@@ -67,16 +69,54 @@ test('activation removes obsolete QR caches and preserves unrelated apps', async
 test('installed launch serves the cached scanner even when the network never responds', { timeout: 1000 }, async () => {
   const installed = await installedCache({ network: () => new Promise(() => {}) });
   const html = await (await installed.fetch('./', 'navigate')).text();
-  assert.match(html, /PCI QR · v36/);
+  assert.match(html, /PCI QR · v37/);
+});
+
+test('a same-scope QR destination gets its own document and scanner launch queries still work offline', async () => {
+  const h = await installedCache({ network: async request => {
+    if (request.url.endsWith('/destination.html')) return new Response('QR destination');
+    throw new Error('Offline');
+  } });
+  assert.equal(await (await h.fetch('./destination.html', 'navigate')).text(), 'QR destination');
+  assert.match(await (await h.fetch('./?from=launcher', 'navigate')).text(), /PCI QR · v37/);
+  assert.match(await (await h.fetch('./index.html?from=launcher', 'navigate')).text(), /PCI QR · v37/);
 });
 
 test('background shell refresh cannot strand offline users on uncached future scripts', async () => {
-  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=37"></script>') });
+  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=38"></script><script src="./scanner.js?v=38"></script>') });
   await installed.fetch('./', 'navigate');
-  await new Promise(setImmediate);
+  await Promise.all(installed.background);
   const html = await (await installed.fetch('./', 'navigate')).text();
-  assert.match(html, /PCI QR · v36/);
-  assert.ok((await (await installed.fetch('./scanner.js?v=36')).text()).length > 100);
+  assert.match(html, /PCI QR · v37/);
+  assert.ok((await (await installed.fetch('./scanner.js?v=37')).text()).length > 100);
 });
 
+for (const method of ['open', 'match']) test(`failed cache ${method} falls back to one network request for HTML, scripts and assets`, async () => {
+  const calls = [];
+  const h = await installedCache({ network: async request => {
+    calls.push(request.url);
+    return new Response('Network copy of ' + request.url);
+  } });
+  const target = method === 'open' ? h.caches : h.cache;
+  target[method] = async () => { throw new DOMException('Storage unavailable', 'QuotaExceededError'); };
+  for (const path of ['./', './scanner.js?v=37', './vendor/jsQR.js', './icons/pci-qr-192-v7.png']) {
+    const response = await h.fetch(path, path === './' ? 'navigate' : 'cors');
+    assert.equal(await response.text(), 'Network copy of ' + new URL(path, scope).href);
+  }
+  await Promise.all(h.background);
+  assert.equal(calls.length, 4);
+});
+
+test('a cache write failure leaves the online document readable when no cached page exists', async () => {
+  const html = readFileSync(resolve(root, 'index.html'), 'utf8');
+  let writes = 0, requests = 0;
+  const h = await installedCache({ network: async () => { requests++; return new Response(html); } });
+  h.entries.clear();
+  h.cache.put = async () => { writes++; throw new DOMException('Full', 'QuotaExceededError'); };
+  const response = await h.fetch('./', 'navigate');
+  assert.equal(await response.text(), html);
+  await Promise.all(h.background);
+  assert.ok(writes > 0);
+  assert.equal(requests, 1);
+});
 
