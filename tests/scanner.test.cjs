@@ -159,6 +159,17 @@ test('precise frame metadata keeps scanning when currentTime is rounded, but rep
   assert.equal(h.sizes.length, 3);
 });
 
+test('newly presented frames can carry the next QR even when their playback timestamps repeat', async () => {
+  let value = 'FIRST';
+  const h = harness({ decode: async () => [{ rawValue: value }] });
+  h.scanner.start();
+  await h.step(0, 1, { mediaTime: 1, presentedFrames: 7 });
+  value = 'NEXT';
+  await h.step(35, 1, { mediaTime: 1, presentedFrames: 8 });
+  await h.step(70, 1, { mediaTime: 1, presentedFrames: 8 });
+  assert.deepEqual(h.results, ['FIRST', 'NEXT']);
+});
+
 test('native decoder recovery creates CPU-readable crops for the fallback', async () => {
   const h = harness({ decode: async () => { throw new Error('Native decoder failed'); } });
   h.scanner.start(); await h.step(0); await h.step(50);

@@ -1,5 +1,5 @@
-const CACHE = 'lector-qr-v37';
-const ASSETS = ['./', './index.html', './styles.css?v=37', './app.js?v=37', './camera.js?v=37', './scanner.js?v=37', './scan-worker.js?v=37', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest?v=37', './icons/pci-qr-48-v7.png', './icons/pci-qr-96-v7.png', './icons/pci-qr-192-v7.png', './icons/pci-qr-512-v7.png', './icons/pci-qr-180-v7.png', './icons/pci-qr-maskable-v7.png'];
+const CACHE = 'lector-qr-v38';
+const ASSETS = ['./', './index.html', './styles.css?v=38', './app.js?v=38', './camera.js?v=38', './scanner.js?v=38', './scan-worker.js?v=38', './vendor/jsQR.js', './vendor/LICENSE-jsQR.txt', './manifest.webmanifest?v=38', './icons/pci-qr-48-v7.png', './icons/pci-qr-96-v7.png', './icons/pci-qr-192-v7.png', './icons/pci-qr-512-v7.png', './icons/pci-qr-180-v7.png', './icons/pci-qr-maskable-v7.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
@@ -48,7 +48,7 @@ self.addEventListener('fetch', event => {
       const html = await copy.clone().text();
       // A newer document must be installed with its own offline dependencies.
       // Keep this version usable if connectivity drops during an update.
-      if (!html.includes('./app.js?v=37') || !html.includes('./scanner.js?v=37')) return;
+      if (!html.includes('./app.js?v=38') || !html.includes('./scanner.js?v=38')) return;
       await Promise.all([
         cache.put(request, copy.clone()), cache.put(index, copy.clone()),
         cache.put(root, copy)
