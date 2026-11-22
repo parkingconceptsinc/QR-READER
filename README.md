@@ -14,6 +14,10 @@ A speed-first, installable QR scanner. The rear camera starts when the page open
 
 There is no build step, remote decoder, framework, external font, or CDN dependency.
 
+## v39 viewfinder and launcher
+
+The camera guide stays clear during live scans. A locally bundled lens image appears in the paused and unavailable states. Image import and camera actions share the control panel, with focus available on the preview and lens details in Camera settings. Android gets dedicated opaque, maskable PCI icons at 192 and 512 pixels. The manifest keeps the URL used by v38 installations.
+
 ## v38 consecutive scans
 
 The camera accepts a different QR immediately, including when the previous label is also detected. When the camera has seen a clear view for several fresh frames, another label with the same contents can be scanned. Returning with the old label still in view keeps the scanner ready. Live text results leave the viewfinder in place.
@@ -40,10 +44,10 @@ Cyan acquisition corners with violet details, a restrained scan sweep, tap-to-fo
 
 ## Speed and camera behavior
 
-- Camera, scan guide and primary controls lead the screen. Secondary camera settings are collapsed. The v35 cyberpunk guide uses a small CSS transform/opacity sweep and status light while the camera is active. Panel and control transitions are brief; no blur filters, external assets, visual JavaScript frame loop, or animation delay is added to acquisition, decoding or navigation. The measured crop guide never moves. Effects pause in the background and respect reduced motion. The header reuses the small PCI QR icon instead of loading the large logo image.
+- The camera, static scan guide and primary actions lead the screen. A brief capture confirmation respects reduced motion. The live view uses no decorative image, continuous animation or visual JavaScript loop. The header uses a small local icon.
 - Verified, identified rear lenses skip redundant post-acquisition enumeration. Subsequent camera restarts reuse the device list within the current page session. Device-change events and acquisition failures invalidate that list. Nothing saves a manual lens across visits; return navigation restores automatic selection.
 - Main/standard rear lenses and exposed autofocus capabilities outrank identified auxiliary/front lenses. Anonymous devices retain the browser's rear-camera choice. If permission reveals a better rear lens, the initial camera is released before switching. The app does not probe every camera.
-- Requests ideal 3840 × 2160 capture at 30 fps without a hard minimum. Capability negotiation supports portrait orientation and gracefully retains a working lower-resolution stream. Actual active settings are shown in the preview.
+- Requests ideal 3840 × 2160 capture at 30 fps without a hard minimum. Capability negotiation supports portrait orientation and gracefully retains a working lower-resolution stream. Actual active settings are shown under Camera settings.
 - Scanning starts alongside tuning. Focus, exposure, white balance and supported points of interest use one driver call with independent optional constraint sets. Rejected combinations fall back independently. Already-current zoom is not reset unnecessarily. Manual focus/zoom controls and conservative automatic zoom remain available where exposed.
 - High capture detail is separate from decoding size. Ordinary native crops are capped at 768 pixels on the long side. Threaded fallback crops use 640, or 512 when recent decoding is slow. Every fifth attempt retains a detailed crop; every sixth checks the whole visible preview, with a quiet border around the guide. Fallback detailed passes use up to 1280 pixels when processing allows it. Uploaded images use up to 1600 pixels.
 - Preview geometry is reused between layout changes. Native detection avoids CPU pixel readback. Four bounded crop surfaces avoid repeated resizing between recovery passes. The fallback transfers pixels to the worker without drawing a second copy of an already-sized crop.

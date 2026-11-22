@@ -41,17 +41,22 @@ function setVisualState(state) {
   stage.setAttribute('aria-busy', String(state === 'opening' || state === 'reading'));
   $('liveBadge').hidden = false;
   const labels = {
-    opening: ['CONNECTING', 'Opening your camera', 'Keep the QR inside the frame'],
-    scanning: ['LIVE SCAN', 'Ready for your next scan', 'Keep the QR inside the frame'],
-    idle: ['PAUSED', 'Camera paused', 'Tap Start scanning to continue'],
-    reading: ['IMAGE SCAN', 'Reading your image', 'Looking for a QR code'],
-    detected: ['CODE DETECTED', 'Opening your link', 'Ready for your next scan'],
-    error: ['CAMERA OFFLINE', 'Camera needs attention', 'Check the message below, then retry']
+    opening: ['Connecting', 'Opening your camera', 'Allow camera access to scan.'],
+    scanning: ['Live', 'Ready to scan', 'Align a QR inside the frame.'],
+    idle: ['Paused', 'Camera paused', 'Start scanning when you’re ready.'],
+    reading: ['Image scan', 'Reading your image', 'Looking for a QR code.'],
+    detected: ['Detected', 'Opening your link', 'Return here for your next scan.'],
+    error: ['Camera off', 'Camera unavailable', 'Retry the camera or scan a saved image.']
   };
   const [label, title, message] = labels[state];
   $('scanState').textContent = label;
   $('placeholderTitle').textContent = title;
   $('placeholderMessage').textContent = message;
+}
+
+function setCameraAction(label, stopping = false) {
+  $('cameraActionLabel').textContent = label;
+  $('cameraActionIcon').setAttribute('href', stopping ? '#i-stop' : '#i-camera');
 }
 
 function detectionFeedback() {
@@ -112,7 +117,7 @@ const scanner = QRScanner.create({
     stopCamera();
     setVisualState('error');
     say(error.message || 'QR scanning paused. Tap Retry scanner.', true);
-    $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry scanner';
+    setCameraAction('Retry scanner');
   }
 });
 let workerRegistrationStarted = false;
@@ -170,7 +175,7 @@ function showCameraFailure(message) {
   setVisualState('error');
   say(message, true);
   $('cameraHint').textContent = 'Camera unavailable · Check permissions or close other apps, then retry';
-  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
+  setCameraAction('Retry camera');
 }
 
 function reconnectCamera(activeSession, message) {
@@ -184,7 +189,7 @@ function reconnectCamera(activeSession, message) {
   setVisualState('opening');
   say(message + ' Reconnecting…');
   $('cameraHint').textContent = 'Camera interrupted · Reconnecting automatically';
-  $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Cancel retry';
+  setCameraAction('Cancel retry', true);
   const delay = cameraRecoveryAttempts === 1 ? 500 : 1200;
   cameraRecoveryTimer = setTimeout(() => {
     cameraRecoveryTimer = null;
@@ -238,13 +243,16 @@ function renderHistory() {
   if ($('historyWrap').hidden) return;
   for (const item of items) {
     const li = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
     const value = document.createElement('span');
     value.textContent = item.value;
     value.title = item.value;
     const time = document.createElement('time');
     time.textContent = new Date(item.time).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
-    li.append(value, time);
-    li.addEventListener('click', () => showResult(item.value, false));
+    button.append(value, time);
+    button.addEventListener('click', () => showResult(item.value, false));
+    li.append(button);
     $('historyList').append(li);
   }
 }
@@ -363,7 +371,7 @@ function stopCamera() {
   $('focusButton').hidden = true;
   $('zoomControls').hidden = true;
   $('cameraPicker').hidden = true;
-  $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Start scanning';
+  setCameraAction('Start scanning');
   $('cameraHint').textContent = 'Camera ready · Scan again instantly';
 }
 
@@ -382,7 +390,7 @@ async function startCamera(force = false) {
   cameraRequest = request;
   starting = true;
   setVisualState('opening');
-  $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Cancel camera request';
+  setCameraAction('Cancel request', true);
   say('Requesting camera access…');
   try {
     const { stream: openedStream, devices } = await QRCamera.open({
@@ -414,7 +422,7 @@ async function startCamera(force = false) {
     const track = stream.getVideoTracks()[0];
     monitorCameraTrack(track, activeSession);
     renderCameraOptions(devices, track);
-    $('cameraButton').innerHTML = '<span aria-hidden="true">◼</span> Stop scanning';
+    setCameraAction('Stop scanning', true);
     updateCameraHint(track);
     say('Scanning automatically. Point at a QR code.');
     scanner.start(heldCodes.size > 0);
@@ -434,16 +442,17 @@ async function startCamera(force = false) {
     }
     stopCamera();
     setVisualState('error');
-    const message = error.name === 'NotAllowedError' || error.name === 'SecurityError'
+    const permissionBlocked = error.name === 'NotAllowedError' || error.name === 'SecurityError';
+    const message = permissionBlocked
       ? 'Camera permission is blocked. In Chrome, open the site controls beside the address bar → Site settings → Camera → Allow. In Windows, enable Settings → Privacy & security → Camera. Then reload and tap Retry camera.'
       : error.name === 'NotFoundError'
-        ? 'No usable rear camera was found. The front camera is not used for scanning.'
+        ? 'No rear camera was found on this device.'
         : error.name === 'OverconstrainedError'
           ? 'The selected camera is not available. Tap Retry camera.'
           : error.message || 'Camera could not start. Tap Retry camera.';
-    say(message, true);
+    say(permissionBlocked ? 'Camera permission is blocked. Allow camera access in your browser, then retry.' : message, true);
     $('cameraHint').textContent = message;
-    $('cameraButton').innerHTML = '<span aria-hidden="true">◎</span> Retry camera';
+    setCameraAction('Retry camera');
   }
 }
 

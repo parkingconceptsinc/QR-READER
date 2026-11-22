@@ -3,82 +3,100 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#050b16">
+  <meta name="theme-color" content="#080f19">
   <meta name="description" content="Scan QR codes with your camera or from an image. No account needed.">
   <link rel="manifest" href="./manifest.webmanifest?v=38">
-  <link rel="icon" href="./icons/pci-qr-48-v7.png" sizes="48x48" type="image/png">
-  <link rel="apple-touch-icon" sizes="180x180" href="./icons/pci-qr-180-v7.png">
-  <link rel="stylesheet" href="./styles.css?v=38">
+  <link rel="icon" href="./icons/pci-qr-48-v8.png" sizes="48x48" type="image/png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/pci-qr-180-v8.png">
+  <link rel="stylesheet" href="./styles.css?v=39">
   <title>PCI · QR Scanner</title>
 </head>
 <body>
+  <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h3l1.7-2h5.6l1.7 2h3A1.5 1.5 0 0 1 21 8.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><circle cx="12" cy="13" r="3.6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5.5" y="5.5" width="13" height="13" rx="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2"/><path d="m4 18 5-5 3 3 3.5-5 5 6"/></symbol>
+    <symbol id="i-focus" viewBox="0 0 24 24"><path d="M8 3H4a1 1 0 0 0-1 1v4m13-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m13-5v4a1 1 0 0 1-1 1h-4"/><circle cx="12" cy="12" r="3.5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M3 7h3m4 0h11M3 17h11m4 0h3"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 6v5h5M3.6 10a8.5 8.5 0 1 1 .8 6.7M12 7.5V12l3 1.8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7"/></symbol>
+    <symbol id="i-install" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
+  </svg>
   <main class="app">
     <header class="header">
-      <div class="brand"><img class="brand-logo" src="./icons/pci-qr-96-v7.png" width="38" height="38" alt="PCI"><span class="brand-label">QR Reader<small>POINT. SCAN. GO.</small></span></div>
-      <button id="install" class="install" hidden>Install app</button>
+      <div class="brand">
+        <img class="brand-logo" src="./icons/pci-qr-96-v8.png" alt="" width="50" height="50">
+        <div><span class="brand-company">Parking Concepts, Inc.</span><h1>QR Reader</h1></div>
+      </div>
+      <button id="install" class="install" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-install"/></svg>Install app</button>
     </header>
 
-    <section class="scanner" aria-label="QR code scanner">
-      <div class="camera-stage" id="stage" data-state="opening" aria-busy="true">
-        <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
-        <div class="camera-placeholder" id="placeholder">
-          <div class="placeholder-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><path d="M17 7H7v10M31 7h10v10M7 31v10h10M41 31v10H31"/><path d="M17 17h5v5h-5zM27 17h4v5h-4zM17 27h5v4h-5zM27 27h4v4h-4z"/></svg></div>
-          <strong id="placeholderTitle">Opening your camera</strong>
-          <span id="placeholderMessage">Keep the QR inside the frame</span>
+    <div class="workspace">
+      <section class="viewfinder" aria-label="QR code scanner">
+        <div class="camera-stage" id="stage" data-state="opening" aria-busy="true">
+          <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
+          <div class="scan-frame" id="scanFrame" aria-hidden="true">
+            <i class="corner"></i><i class="corner"></i><i class="corner"></i><i class="corner"></i>
+            <i class="frame-center"></i>
+          </div>
+          <div class="camera-placeholder" id="placeholder">
+            <strong id="placeholderTitle">Opening your camera</strong>
+            <span id="placeholderMessage">Allow camera access to scan.</span>
+          </div>
+          <div class="focus-reticle" id="focusReticle" aria-hidden="true"></div>
+          <div class="live-badge" id="liveBadge"><i aria-hidden="true"></i><span id="scanState">Connecting</span></div>
         </div>
-        <div class="scan-frame" id="scanFrame" aria-hidden="true">
-          <span class="corner"></span><span class="corner"></span><span class="corner"></span><span class="corner"></span>
-          <div class="frame-heading"><span>QR ACQUISITION</span><span class="frame-mode">AUTO</span></div>
-          <div class="frame-grid"></div>
-          <div class="beam-window"><div class="scan-beam"></div></div>
-          <div class="frame-crosshair"></div>
-          <div class="frame-caption">ALIGN · SCAN · GO</div>
-        </div>
-        <div class="focus-reticle" id="focusReticle" aria-hidden="true"></div>
-        <div class="live-badge" id="liveBadge"><i aria-hidden="true"></i><span id="scanState">CONNECTING</span></div>
-        <div class="stage-mark" aria-hidden="true">PCI <span>VISION</span></div>
-        <div class="camera-hint" id="cameraHint">Requesting camera access · QR links open instantly</div>
-      </div>
-      <div class="controls">
-        <button id="cameraButton" class="primary"><span aria-hidden="true">◎</span> Opening camera…</button>
-        <button id="focusButton" class="icon-button" title="Refocus rear camera" aria-label="Refocus rear camera" hidden>◎</button>
-      </div>
-      <details class="camera-settings">
-        <summary>Camera controls</summary>
-      <div id="zoomControls" class="zoom-controls" hidden>
-        <label for="zoomRange">Zoom <output id="zoomValue" for="zoomRange">1.0×</output></label>
-        <input id="zoomRange" type="range" min="1" max="1" step="0.1" value="1" aria-label="Rear camera zoom">
-        <button id="autoZoomButton" class="text-button" aria-pressed="true">Auto</button>
-      </div>
-      <label id="cameraPicker" class="camera-picker" hidden>Camera
-        <select id="cameraSelect" aria-label="Choose camera lens"></select>
-      </label>
-      </details>
-      <button id="uploadButton" class="upload" type="button"><span aria-hidden="true">↑</span> Scan an image</button>
-      <input id="fileInput" type="file" accept="image/*" hidden>
-      <p id="status" class="status" role="status" aria-live="polite">Requesting camera access…</p>
-    </section>
+        <button id="focusButton" class="focus-button" title="Refocus rear camera" aria-label="Refocus rear camera" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-focus"/></svg>Refocus</button>
+      </section>
 
-    <section id="result" class="result" aria-labelledby="resultTitle" hidden>
-      <div class="section-heading"><span class="check">✓</span><h2 id="resultTitle">Code detected</h2></div>
-      <p id="resultValue" class="result-value"></p>
-      <div class="result-actions">
-        <a id="openLink" class="secondary" target="_blank" rel="noopener noreferrer" hidden>Open link ↗</a>
-        <button id="copyButton" class="secondary">Copy content</button>
-      </div>
-    </section>
+      <div class="tool-column">
+        <section class="panel controls-panel" aria-labelledby="controlsTitle">
+          <h2 id="controlsTitle">Scan controls</h2>
+          <div class="actions">
+            <button id="cameraButton" class="primary" type="button"><svg class="icon" aria-hidden="true"><use id="cameraActionIcon" href="#i-camera"/></svg><span id="cameraActionLabel">Opening camera…</span></button>
+            <button id="uploadButton" class="secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#i-image"/></svg>Scan image</button>
+          </div>
+          <input id="fileInput" type="file" accept="image/*" hidden>
+          <p id="status" class="status" role="status" aria-live="polite">Requesting camera access…</p>
+          <details class="camera-settings">
+            <summary><svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg>Camera settings</summary>
+            <div class="settings-body">
+              <p class="camera-hint" id="cameraHint">Camera details appear when connected.</p>
+              <div id="zoomControls" class="zoom-controls" hidden>
+                <label for="zoomRange">Zoom <output id="zoomValue" for="zoomRange">1.0×</output></label>
+                <input id="zoomRange" type="range" min="1" max="1" step="0.1" value="1" aria-label="Rear camera zoom">
+                <button id="autoZoomButton" class="text-button" type="button" aria-pressed="true">Auto</button>
+              </div>
+              <label id="cameraPicker" class="camera-picker" hidden>Camera
+                <select id="cameraSelect" aria-label="Choose camera lens"></select>
+              </label>
+            </div>
+          </details>
+        </section>
 
-    <section class="history" aria-labelledby="historyTitle">
-      <div class="history-heading"><h2 id="historyTitle">Recent scans</h2><div><button id="historyToggle" class="text-button" aria-expanded="false">Show</button><button id="clearButton" class="text-button" hidden>Clear</button></div></div>
-      <p id="emptyHistory" class="empty" hidden>Your latest scans will appear here.</p>
-      <div class="history-list-wrap" id="historyWrap" hidden><ul id="historyList"></ul></div>
-    </section>
-    <footer>PCI QR · v38 · Speed first.</footer>
+        <section id="result" class="panel result" aria-labelledby="resultTitle" hidden>
+          <div class="section-title"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><h2 id="resultTitle">Code detected</h2></div>
+          <p id="resultValue" class="result-value"></p>
+          <div class="result-actions">
+            <a id="openLink" class="secondary" target="_blank" rel="noopener noreferrer" hidden>Open link</a>
+            <button id="copyButton" class="secondary" type="button">Copy content</button>
+          </div>
+        </section>
+
+        <section class="panel history" aria-labelledby="historyTitle">
+          <div class="history-heading">
+            <div class="section-title"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg><h2 id="historyTitle">Recent scans</h2></div>
+            <div class="history-actions"><button id="historyToggle" class="text-button" type="button" aria-controls="historyWrap emptyHistory" aria-expanded="false">Show</button><button id="clearButton" class="text-button" type="button" hidden>Clear</button></div>
+          </div>
+          <p id="emptyHistory" class="empty" hidden>No scans yet.</p>
+          <div id="historyWrap" hidden><ul id="historyList"></ul></div>
+        </section>
+      </div>
+    </div>
+    <footer>PCI QR · v39</footer>
   </main>
-  <script src="./camera.js?v=38" defer></script>
-  <script src="./scanner.js?v=38" defer></script>
-  <script src="./app.js?v=38" defer></script>
+  <script src="./camera.js?v=39" defer></script>
+  <script src="./scanner.js?v=39" defer></script>
+  <script src="./app.js?v=39" defer></script>
 </body>
 </html>
-
-
