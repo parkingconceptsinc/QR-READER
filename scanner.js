@@ -21,7 +21,7 @@ globalThis.QRScanner = (() => {
     }
     try {
       if (typeof Worker === 'function') {
-        worker = new Worker('./scan-worker.js?v=38');
+        worker = new Worker('./scan-worker.js?v=39');
         worker.onmessage = ({ data }) => {
           const request = pending.get(data.id);
           if (!request) return;

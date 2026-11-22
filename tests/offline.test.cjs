@@ -59,6 +59,33 @@ test('installed PWA loads its document, scripts, decoder worker and worker depen
   assert.ok((await (await installed.fetch(dependency)).text()).length > 10000);
 });
 
+test('installed Android launchers receive the new icons and the viewfinder artwork offline', async () => {
+  const installed = await installedCache();
+  const html = await (await installed.fetch('./', 'navigate')).text();
+  const manifestUrl = html.match(/rel="manifest" href="([^"]+)"/)[1];
+  assert.equal(manifestUrl, './manifest.webmanifest?v=38');
+  const manifest = await (await installed.fetch(manifestUrl)).json();
+
+  for (const purpose of ['any', 'maskable']) {
+    const icons = manifest.icons.filter(icon => icon.purpose === purpose);
+    assert.deepEqual(icons.map(icon => icon.sizes).sort(), ['192x192', '512x512']);
+    for (const icon of icons) {
+      assert.match(icon.src, /-v8\.png$/);
+      const bytes = Buffer.from(await (await installed.fetch(icon.src)).arrayBuffer());
+      assert.equal(bytes.toString('ascii', 1, 4), 'PNG');
+      const side = Number(icon.sizes.split('x')[0]);
+      assert.equal(bytes.readUInt32BE(16), side);
+      assert.equal(bytes.readUInt32BE(20), side);
+    }
+  }
+
+  const cssUrl = html.match(/rel="stylesheet" href="([^"]+)"/)[1];
+  const css = await (await installed.fetch(cssUrl)).text();
+  const artwork = css.match(/url\("([^"]+\.webp)"\)/)[1];
+  const bytes = Buffer.from(await (await installed.fetch(artwork)).arrayBuffer());
+  assert.equal(bytes.toString('ascii', 8, 12), 'WEBP');
+});
+
 test('activation removes obsolete QR caches and preserves unrelated apps', async () => {
   const installed = await installedCache();
   assert.ok(installed.cacheKeys.includes('unrelated-app'));
@@ -69,7 +96,7 @@ test('activation removes obsolete QR caches and preserves unrelated apps', async
 test('installed launch serves the cached scanner even when the network never responds', { timeout: 1000 }, async () => {
   const installed = await installedCache({ network: () => new Promise(() => {}) });
   const html = await (await installed.fetch('./', 'navigate')).text();
-  assert.match(html, /PCI QR · v38/);
+  assert.match(html, /PCI QR · v39/);
 });
 
 test('a same-scope QR destination gets its own document and scanner launch queries still work offline', async () => {
@@ -78,17 +105,17 @@ test('a same-scope QR destination gets its own document and scanner launch queri
     throw new Error('Offline');
   } });
   assert.equal(await (await h.fetch('./destination.html', 'navigate')).text(), 'QR destination');
-  assert.match(await (await h.fetch('./?from=launcher', 'navigate')).text(), /PCI QR · v38/);
-  assert.match(await (await h.fetch('./index.html?from=launcher', 'navigate')).text(), /PCI QR · v38/);
+  assert.match(await (await h.fetch('./?from=launcher', 'navigate')).text(), /PCI QR · v39/);
+  assert.match(await (await h.fetch('./index.html?from=launcher', 'navigate')).text(), /PCI QR · v39/);
 });
 
 test('background shell refresh cannot strand offline users on uncached future scripts', async () => {
-  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=39"></script><script src="./scanner.js?v=39"></script>') });
+  const installed = await installedCache({ network: async () => new Response('<script src="./app.js?v=40"></script><script src="./scanner.js?v=40"></script>') });
   await installed.fetch('./', 'navigate');
   await Promise.all(installed.background);
   const html = await (await installed.fetch('./', 'navigate')).text();
-  assert.match(html, /PCI QR · v38/);
-  assert.ok((await (await installed.fetch('./scanner.js?v=38')).text()).length > 100);
+  assert.match(html, /PCI QR · v39/);
+  assert.ok((await (await installed.fetch('./scanner.js?v=39')).text()).length > 100);
 });
 
 for (const method of ['open', 'match']) test(`failed cache ${method} falls back to one network request for HTML, scripts and assets`, async () => {
@@ -99,7 +126,7 @@ for (const method of ['open', 'match']) test(`failed cache ${method} falls back 
   } });
   const target = method === 'open' ? h.caches : h.cache;
   target[method] = async () => { throw new DOMException('Storage unavailable', 'QuotaExceededError'); };
-  for (const path of ['./', './scanner.js?v=38', './vendor/jsQR.js', './icons/pci-qr-192-v7.png']) {
+  for (const path of ['./', './scanner.js?v=39', './vendor/jsQR.js', './icons/pci-qr-192-v8.png']) {
     const response = await h.fetch(path, path === './' ? 'navigate' : 'cors');
     assert.equal(await response.text(), 'Network copy of ' + new URL(path, scope).href);
   }

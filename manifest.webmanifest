@@ -1,28 +1,34 @@
 {
-  "name": "PCI · QR Scanner",
+  "name": "PCI \u00b7 QR Scanner",
   "short_name": "PCI QR",
   "description": "Scan QR codes with your camera or from an image.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#050b16",
-  "theme_color": "#050b16",
+  "background_color": "#080f19",
+  "theme_color": "#080f19",
   "lang": "en",
   "icons": [
     {
-      "src": "./icons/pci-qr-192-v7.png",
+      "src": "./icons/pci-qr-192-v8.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/pci-qr-512-v7.png",
+      "src": "./icons/pci-qr-512-v8.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/pci-qr-maskable-v7.png",
+      "src": "./icons/pci-qr-maskable-192-v8.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icons/pci-qr-maskable-512-v8.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
